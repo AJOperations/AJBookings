@@ -251,27 +251,8 @@ def _hq_get(path):
         return {'error': str(e)}, 502
 
 
-def validate_job_number_against_hq(job_number):
-    """
-    Returns (ok: bool, warning: str|None).
-
-    Format must always be a hard 7-digit match. The HQ registry lookup is
-    a soft check on top of that: if HQ is unreachable, we don't want a
-    transient network blip to block event creation, so we let it through
-    with a warning rather than a hard 400. If HQ responds and the job
-    genuinely isn't in the registry, that *is* a hard reject — Christine,
-    flagging this asymmetry in case you'd rather it always hard-fail.
-    """
-    if not is_valid_job_number(job_number):
-        return False, None
-
-    data, status = _hq_get(f'/api/jobs/{job_number}')
-    if status == 200 and data.get('job'):
-        return True, None
-    if status == 200 and not data.get('job'):
-        return False, None
-    # HQ unreachable / non-200 for reasons other than "not found"
-    return True, 'Could not verify job number against HQ registry (HQ unreachable) — allowed through.'
+def _gen_token():
+    return secrets.token_urlsafe(24)
 
 
 # ── HQ Proxy Block (verbatim per reference-app-standards) ────────────────────
@@ -466,10 +447,6 @@ def create_event():
     if not is_valid_job_number(job_number):
         return jsonify({'error': 'job_number must be exactly 7 digits'}), 400
 
-    ok, warning = validate_job_number_against_hq(job_number)
-    if not ok:
-        return jsonify({'error': f'Job number {job_number} was not found in the HQ job registry'}), 400
-
     db = get_db()
     slug = _unique_slug(db, _slugify(name))
     user_id, user_name = _current_user_brief()
@@ -492,10 +469,7 @@ def create_event():
     db.commit()
 
     event = _row_to_dict(db.execute("SELECT * FROM events WHERE id = ?", (cur.lastrowid,)).fetchone())
-    resp = {'event': event}
-    if warning:
-        resp['warning'] = warning
-    return jsonify(resp), 201
+    return jsonify({'event': event}), 201
 
 
 @app.route('/api/events/<int:event_id>', methods=['GET'])
@@ -980,17 +954,14 @@ def delete_form_field(field_id):
     return jsonify({'deleted': True})
 
 
-# ── Bookings — read-only stub ─────────────────────────────────────────────────
-# Public booking flow isn't built yet (no rows can exist via the app itself
-# yet), but the endpoint is wired so the admin event detail page has
-# somewhere real to call once it does.
+# ── Bookings — admin read + manual waitlist promotion ────────────────────────
 
 @app.route('/api/events/<int:event_id>/bookings', methods=['GET'])
 @require_auth
 def list_bookings(event_id):
     db = get_db()
     rows = db.execute("""
-        SELECT b.*, s.start_time, s.end_time
+        SELECT b.*, s.start_time, s.end_time, s.capacity AS slot_capacity
         FROM bookings b
         JOIN slots s ON s.id = b.slot_id
         WHERE s.event_id = ?
@@ -1002,6 +973,248 @@ def list_bookings(event_id):
         d['custom_field_answers'] = json.loads(d['custom_field_answers'])
         out.append(d)
     return jsonify({'bookings': out})
+
+
+@app.route('/api/bookings/<int:booking_id>/promote', methods=['POST'])
+@require_auth
+def promote_booking(booking_id):
+    """
+    Manual waitlist promotion only — no auto-promotion when a slot opens
+    up. Admin sees the waitlist on the event detail page and triggers this
+    explicitly. Confirms the booking if there's room; sends the (stubbed)
+    promotion email either way it succeeds.
+    """
+    db = get_db()
+    booking = db.execute("SELECT * FROM bookings WHERE id = ?", (booking_id,)).fetchone()
+    if not booking:
+        return jsonify({'error': 'not found'}), 404
+    if booking['status'] != 'waitlisted':
+        return jsonify({'error': 'only waitlisted bookings can be promoted'}), 400
+
+    slot = db.execute("SELECT * FROM slots WHERE id = ?", (booking['slot_id'],)).fetchone()
+    confirmed_count = db.execute(
+        "SELECT COUNT(*) FROM bookings WHERE slot_id = ? AND status = 'confirmed'", (slot['id'],)
+    ).fetchone()[0]
+    if confirmed_count >= slot['capacity']:
+        return jsonify({'error': 'slot is still full — no room to promote'}), 409
+
+    db.execute("UPDATE bookings SET status = 'confirmed' WHERE id = ?", (booking_id,))
+    db.commit()
+
+    send_email(
+        booking['email'],
+        "You're confirmed!",
+        f"A spot opened up and you've been moved from the waitlist to confirmed for your booking."
+    )
+    return jsonify({'promoted': True})
+
+
+# ── Public booking surface (/book/<slug>) ─────────────────────────────────────
+# No AJ header/theme/auth — intentionally outside the AJ visual ecosystem.
+# Anyone with the link can view and book. Cancel/reschedule are reached via
+# unguessable tokens (secrets.token_urlsafe), not event-scoped auth.
+
+def _slot_state(db, slot):
+    """Returns 'open' | 'waitlist' | 'full' for a given slot row."""
+    confirmed = db.execute(
+        "SELECT COUNT(*) FROM bookings WHERE slot_id = ? AND status = 'confirmed'", (slot['id'],)
+    ).fetchone()[0]
+    if confirmed < slot['capacity']:
+        return 'open', confirmed
+    return 'full', confirmed
+
+
+def _is_valid_email(val):
+    return bool(re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', str(val or '').strip()))
+
+
+@app.route('/book/<slug>')
+def public_booking_page(slug):
+    return render_template('public_booking.html', slug=slug)
+
+
+@app.route('/book/<slug>/cancel/<token>')
+def public_cancel_page(slug, token):
+    db = get_db()
+    booking = db.execute("SELECT * FROM bookings WHERE cancel_token = ?", (token,)).fetchone()
+    return render_template('public_cancel.html', slug=slug, token=token,
+                            booking_found=booking is not None,
+                            already_cancelled=(booking is not None and booking['status'] == 'cancelled'))
+
+
+@app.route('/book/<slug>/reschedule/<token>')
+def public_reschedule_action(slug, token):
+    """
+    Per spec: 'reschedule returns to the booking page pre-filtered to that
+    event' — implemented as: release the old slot (cancel that booking),
+    then redirect back to the booking page with a banner so they pick a
+    new time. If the event doesn't allow reschedule, nothing is released.
+    """
+    db = get_db()
+    booking = db.execute("SELECT * FROM bookings WHERE reschedule_token = ?", (token,)).fetchone()
+    if not booking or booking['status'] == 'cancelled':
+        return render_template('public_booking.html', slug=slug, reschedule_error='invalid_token')
+
+    slot = db.execute("SELECT * FROM slots WHERE id = ?", (booking['slot_id'],)).fetchone()
+    event = db.execute("SELECT * FROM events WHERE id = ?", (slot['event_id'],)).fetchone()
+
+    if not event['allow_reschedule']:
+        return render_template('public_booking.html', slug=event['slug'], reschedule_error='not_allowed')
+
+    db.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (booking['id'],))
+    db.commit()
+    return render_template('public_booking.html', slug=event['slug'], reschedule_released=True)
+
+
+# ── Public API — read ─────────────────────────────────────────────────────────
+
+@app.route('/api/public/events/<slug>')
+def public_get_event(slug):
+    db = get_db()
+    event = db.execute("SELECT * FROM events WHERE slug = ?", (slug,)).fetchone()
+    if not event:
+        return jsonify({'error': 'not found'}), 404
+    if event['status'] != 'active':
+        return jsonify({'error': 'not_bookable', 'status': event['status']}), 404
+
+    slots = db.execute(
+        "SELECT * FROM slots WHERE event_id = ? AND start_time > ? ORDER BY start_time ASC",
+        (event['id'], _now())
+    ).fetchall()
+
+    slot_list = []
+    for s in slots:
+        state, confirmed = _slot_state(db, s)
+        if state == 'full' and not event['allow_waitlist']:
+            continue  # full + no waitlist = not offered at all
+        slot_list.append({
+            'id': s['id'],
+            'start_time': s['start_time'],
+            'end_time': s['end_time'],
+            'capacity': s['capacity'],
+            'confirmed_count': confirmed,
+            'location_override': s['location_override'],
+            'state': state if state == 'open' else ('waitlist' if event['allow_waitlist'] else 'full'),
+        })
+
+    fields = db.execute(
+        "SELECT * FROM form_fields WHERE event_id = ? ORDER BY sort_order ASC, id ASC", (event['id'],)
+    ).fetchall()
+    field_list = []
+    for f in fields:
+        d = _row_to_dict(f)
+        d['options'] = json.loads(d['options'])
+        field_list.append(d)
+
+    return jsonify({
+        'event': {
+            'name': event['name'],
+            'location': event['location'],
+            'notes': event['notes'],
+            'allow_waitlist': bool(event['allow_waitlist']),
+            'allow_reschedule': bool(event['allow_reschedule']),
+        },
+        'slots': slot_list,
+        'form_fields': field_list,
+    })
+
+
+@app.route('/api/public/events/<slug>/bookings', methods=['POST'])
+def public_create_booking(slug):
+    db = get_db()
+    event = db.execute("SELECT * FROM events WHERE slug = ?", (slug,)).fetchone()
+    if not event or event['status'] != 'active':
+        return jsonify({'error': 'This event is not currently accepting bookings'}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get('name') or '').strip()
+    email = (body.get('email') or '').strip().lower()
+    slot_id = body.get('slot_id')
+    answers = body.get('custom_field_answers') or {}
+
+    if not name:
+        return jsonify({'error': 'Name is required'}), 400
+    if not _is_valid_email(email):
+        return jsonify({'error': 'A valid email is required'}), 400
+
+    slot = db.execute(
+        "SELECT * FROM slots WHERE id = ? AND event_id = ?", (slot_id, event['id'])
+    ).fetchone()
+    if not slot:
+        return jsonify({'error': 'That slot is no longer available'}), 404
+    if datetime.fromisoformat(slot['start_time']) <= datetime.utcnow():
+        return jsonify({'error': 'That slot has already passed'}), 400
+
+    # Required custom fields
+    fields = db.execute("SELECT * FROM form_fields WHERE event_id = ?", (event['id'],)).fetchall()
+    for f in fields:
+        if f['required']:
+            val = answers.get(str(f['id']))
+            if f['field_type'] == 'checkbox':
+                if val is not True:
+                    return jsonify({'error': f'"{f["label"]}" is required'}), 400
+            elif not val or not str(val).strip():
+                return jsonify({'error': f'"{f["label"]}" is required'}), 400
+
+    # Per-event cap, checked by email, across all non-cancelled bookings for this event
+    if event['max_bookings_per_email']:
+        existing = db.execute("""
+            SELECT COUNT(*) FROM bookings b
+            JOIN slots s ON s.id = b.slot_id
+            WHERE s.event_id = ? AND lower(b.email) = ? AND b.status != 'cancelled'
+        """, (event['id'], email)).fetchone()[0]
+        if existing >= event['max_bookings_per_email']:
+            return jsonify({'error': 'You have reached the maximum number of bookings for this event'}), 400
+
+    state, confirmed = _slot_state(db, slot)
+    if state == 'full':
+        if not event['allow_waitlist']:
+            return jsonify({'error': 'That slot is full'}), 409
+        status = 'waitlisted'
+    else:
+        status = 'confirmed'
+
+    now = _now()
+    cancel_token = _gen_token()
+    reschedule_token = _gen_token()
+
+    cur = db.execute("""
+        INSERT INTO bookings (slot_id, name, email, custom_field_answers, status,
+                               cancel_token, reschedule_token, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (slot['id'], name, email, json.dumps(answers), status, cancel_token, reschedule_token, now))
+    db.commit()
+
+    cancel_url = f'/book/{slug}/cancel/{cancel_token}'
+    reschedule_url = f'/book/{slug}/reschedule/{reschedule_token}' if event['allow_reschedule'] else None
+
+    if status == 'confirmed':
+        send_email(email, "You're confirmed", f"Confirmed for {event['name']}. Manage: {cancel_url}")
+    else:
+        send_email(email, "You're on the waitlist", f"Waitlisted for {event['name']}. Manage: {cancel_url}")
+
+    return jsonify({
+        'booking': {
+            'id': cur.lastrowid,
+            'status': status,
+            'cancel_url': cancel_url,
+            'reschedule_url': reschedule_url,
+        }
+    }), 201
+
+
+@app.route('/api/public/bookings/<token>/cancel', methods=['POST'])
+def public_cancel_booking(token):
+    db = get_db()
+    booking = db.execute("SELECT * FROM bookings WHERE cancel_token = ?", (token,)).fetchone()
+    if not booking:
+        return jsonify({'error': 'not found'}), 404
+    if booking['status'] == 'cancelled':
+        return jsonify({'error': 'already cancelled'}), 400
+
+    db.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (booking['id'],))
+    db.commit()
+    return jsonify({'cancelled': True})
 
 
 if __name__ == '__main__':

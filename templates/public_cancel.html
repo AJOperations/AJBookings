@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cancel Booking</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: #f7f7f8;
+            color: #1a1a1a;
+            margin: 0;
+        }
+        .wrap {
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 60px 20px;
+            text-align: center;
+        }
+        h1 { font-size: 22px; margin-bottom: 12px; }
+        p { color: #555; font-size: 14px; line-height: 1.5; }
+        button {
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            cursor: pointer;
+            background: #c0392b;
+            color: #fff;
+            margin-top: 16px;
+        }
+        button:hover { background: #a93225; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        {% if not booking_found %}
+            <h1>Link not valid</h1>
+            <p>This cancellation link doesn't match any booking. If you think this is a mistake, please reach out directly.</p>
+        {% elif already_cancelled %}
+            <h1>Already cancelled</h1>
+            <p>This booking has already been cancelled — nothing further to do here.</p>
+        {% else %}
+            <div id="confirm-area">
+                <h1>Cancel this booking?</h1>
+                <p>This will free up the slot for someone else. This can't be undone.</p>
+                <button onclick="doCancel()">Cancel My Booking</button>
+            </div>
+            <div id="done-area" class="hidden">
+                <h1>Cancelled</h1>
+                <p>Your booking has been cancelled.</p>
+            </div>
+            <div id="error-area" style="color:#c0392b; font-size:13px; margin-top:12px;"></div>
+        {% endif %}
+    </div>
+
+    <script>
+        async function doCancel() {
+            const res = await fetch('/api/public/bookings/{{ token }}/cancel', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) {
+                document.getElementById('error-area').textContent = data.error || 'Something went wrong.';
+                return;
+            }
+            document.getElementById('confirm-area').classList.add('hidden');
+            document.getElementById('done-area').classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book a Time</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: #f7f7f8;
+            color: #1a1a1a;
+            margin: 0;
+            padding: 0;
+        }
+        .wrap {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 40px 20px 80px;
+        }
+        h1 { font-size: 24px; margin: 0 0 4px; }
+        .meta { color: #666; font-size: 14px; margin-bottom: 4px; }
+        .notes { color: #444; font-size: 14px; margin: 16px 0 28px; line-height: 1.5; }
+        .banner {
+            background: #fff4e5;
+            border: 1px solid #f0c98a;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .banner.error { background: #fdecec; border-color: #e8a1a1; }
+        .day-group { margin-bottom: 24px; }
+        .day-group h3 { font-size: 14px; color: #888; margin: 0 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+        .slot-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #fff;
+            border: 1px solid #e2e2e4;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+        }
+        .slot-time { font-size: 15px; font-weight: 600; }
+        .slot-tag { font-size: 12px; color: #888; margin-left: 8px; }
+        button {
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            padding: 9px 16px;
+            cursor: pointer;
+        }
+        .btn-primary { background: #1a1a1a; color: #fff; }
+        .btn-primary:hover { background: #333; }
+        .btn-secondary { background: #eee; color: #1a1a1a; }
+        .btn-waitlist { background: #444; color: #fff; }
+        .btn-disabled { background: #eee; color: #aaa; cursor: not-allowed; }
+        .form-card {
+            background: #fff;
+            border: 1px solid #e2e2e4;
+            border-radius: 10px;
+            padding: 24px;
+            margin-top: 16px;
+        }
+        .form-row { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
+        .form-row label { font-size: 13px; font-weight: 600; }
+        .form-row input[type="text"], .form-row input[type="email"], .form-row select, .form-row textarea {
+            font-size: 14px;
+            padding: 10px 12px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-family: inherit;
+        }
+        .checkbox-row { display: flex; align-items: center; gap: 8px; }
+        .empty { color: #888; font-size: 14px; padding: 24px 0; text-align: center; }
+        .confirm-screen { text-align: center; padding: 40px 0; }
+        .confirm-screen h2 { font-size: 20px; }
+        .confirm-links { margin-top: 24px; font-size: 14px; }
+        .confirm-links a { color: #1a1a1a; text-decoration: underline; margin: 0 10px; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="wrap" id="app">
+        <div id="banner-area"></div>
+        <div id="content">Loading…</div>
+    </div>
+
+    <script>
+        const SLUG = {{ slug | tojson }};
+        const RESCHEDULE_RELEASED = {{ (reschedule_released | default(false)) | tojson }};
+        const RESCHEDULE_ERROR = {{ (reschedule_error | default(none)) | tojson }};
+
+        let EVENT = null;
+        let SLOTS = [];
+        let FIELDS = [];
+        let SELECTED_SLOT = null;
+
+        document.addEventListener('DOMContentLoaded', init);
+
+        async function init() {
+            renderBanner();
+            const res = await fetch(`/api/public/events/${SLUG}`);
+            const data = await res.json();
+
+            if (!res.ok) {
+                document.getElementById('content').innerHTML = `
+                    <h1>This event isn't available</h1>
+                    <p class="meta">It may not be published yet, or the link may be incorrect.</p>
+                `;
+                return;
+            }
+
+            EVENT = data.event;
+            SLOTS = data.slots;
+            FIELDS = data.form_fields;
+            renderEvent();
+        }
+
+        function renderBanner() {
+            const area = document.getElementById('banner-area');
+            if (RESCHEDULE_RELEASED) {
+                area.innerHTML = `<div class="banner">Your previous booking was released. Pick a new time below.</div>`;
+            } else if (RESCHEDULE_ERROR === 'invalid_token') {
+                area.innerHTML = `<div class="banner error">That reschedule link isn't valid.</div>`;
+            } else if (RESCHEDULE_ERROR === 'not_allowed') {
+                area.innerHTML = `<div class="banner error">Rescheduling isn't enabled for this event — please reach out directly.</div>`;
+            }
+        }
+
+        function fmtDay(iso) {
+            return new Date(iso).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+        }
+        function fmtTime(iso) {
+            return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+        }
+        function esc(s) {
+            const d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        function renderEvent() {
+            const content = document.getElementById('content');
+
+            let html = `<h1>${esc(EVENT.name)}</h1>`;
+            if (EVENT.location) html += `<div class="meta">${esc(EVENT.location)}</div>`;
+            if (EVENT.notes) html += `<div class="notes">${esc(EVENT.notes)}</div>`;
+
+            if (SLOTS.length === 0) {
+                html += `<div class="empty">No times are currently available.</div>`;
+                content.innerHTML = html;
+                return;
+            }
+
+            const byDay = {};
+            SLOTS.forEach(s => {
+                const day = fmtDay(s.start_time);
+                (byDay[day] = byDay[day] || []).push(s);
+            });
+
+            html += `<div id="slots-area">`;
+            Object.entries(byDay).forEach(([day, slots]) => {
+                html += `<div class="day-group"><h3>${day}</h3>`;
+                slots.forEach(s => {
+                    const label = s.state === 'waitlist' ? 'Join Waitlist' : (s.state === 'full' ? 'Full' : 'Book');
+                    const btnClass = s.state === 'waitlist' ? 'btn-waitlist' : (s.state === 'full' ? 'btn-disabled' : 'btn-primary');
+                    const disabled = s.state === 'full' ? 'disabled' : '';
+                    html += `
+                        <div class="slot-row">
+                            <div>
+                                <span class="slot-time">${fmtTime(s.start_time)}–${fmtTime(s.end_time)}</span>
+                                ${s.state === 'waitlist' ? '<span class="slot-tag">Waitlist only</span>' : ''}
+                                ${s.location_override ? `<span class="slot-tag">${esc(s.location_override)}</span>` : ''}
+                            </div>
+                            <button class="${btnClass}" ${disabled} onclick="selectSlot(${s.id})">${label}</button>
+                        </div>`;
+                });
+                html += `</div>`;
+            });
+            html += `</div><div id="form-area"></div>`;
+
+            content.innerHTML = html;
+        }
+
+        function selectSlot(slotId) {
+            SELECTED_SLOT = SLOTS.find(s => s.id === slotId);
+            renderForm();
+            document.getElementById('form-area').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function renderForm() {
+            const area = document.getElementById('form-area');
+            const isWaitlist = SELECTED_SLOT.state === 'waitlist';
+
+            let fieldsHtml = '';
+            FIELDS.forEach(f => {
+                if (f.field_type === 'text') {
+                    fieldsHtml += `
+                        <div class="form-row">
+                            <label>${esc(f.label)}${f.required ? ' *' : ''}</label>
+                            <input type="text" data-field="${f.id}" data-required="${f.required}">
+                        </div>`;
+                } else if (f.field_type === 'select') {
+                    const opts = f.options.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+                    fieldsHtml += `
+                        <div class="form-row">
+                            <label>${esc(f.label)}${f.required ? ' *' : ''}</label>
+                            <select data-field="${f.id}" data-required="${f.required}">
+                                <option value="">Select…</option>${opts}
+                            </select>
+                        </div>`;
+                } else if (f.field_type === 'checkbox') {
+                    fieldsHtml += `
+                        <div class="form-row checkbox-row">
+                            <input type="checkbox" data-field="${f.id}" data-required="${f.required}" data-type="checkbox" id="cb-${f.id}">
+                            <label for="cb-${f.id}" style="margin:0">${esc(f.label)}${f.required ? ' *' : ''}</label>
+                        </div>`;
+                }
+            });
+
+            area.innerHTML = `
+                <div class="form-card">
+                    <h2 style="margin:0 0 4px; font-size:16px;">${fmtTime(SELECTED_SLOT.start_time)}–${fmtTime(SELECTED_SLOT.end_time)}</h2>
+                    ${isWaitlist ? '<p style="font-size:13px; color:#888; margin-top:0;">This time is full — submitting joins the waitlist.</p>' : ''}
+                    <div class="form-row">
+                        <label>Name *</label>
+                        <input type="text" id="bk-name">
+                    </div>
+                    <div class="form-row">
+                        <label>Email *</label>
+                        <input type="email" id="bk-email">
+                    </div>
+                    ${fieldsHtml}
+                    <button class="btn-primary" id="submit-btn" onclick="submitBooking()">${isWaitlist ? 'Join Waitlist' : 'Confirm Booking'}</button>
+                    <button class="btn-secondary" onclick="document.getElementById('form-area').innerHTML=''">Cancel</button>
+                    <div id="form-error" style="color:#c0392b; font-size:13px; margin-top:10px;"></div>
+                </div>`;
+        }
+
+        async function submitBooking() {
+            const name = document.getElementById('bk-name').value.trim();
+            const email = document.getElementById('bk-email').value.trim();
+            const errEl = document.getElementById('form-error');
+            errEl.textContent = '';
+
+            if (!name) { errEl.textContent = 'Name is required.'; return; }
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errEl.textContent = 'A valid email is required.'; return; }
+
+            const answers = {};
+            let missingRequired = null;
+            document.querySelectorAll('[data-field]').forEach(el => {
+                const fid = el.dataset.field;
+                if (el.dataset.type === 'checkbox') {
+                    answers[fid] = el.checked;
+                    if (el.dataset.required === 'true' && !el.checked) missingRequired = true;
+                } else {
+                    answers[fid] = el.value;
+                    if (el.dataset.required === 'true' && !el.value.trim()) missingRequired = true;
+                }
+            });
+            if (missingRequired) { errEl.textContent = 'Please fill in all required fields.'; return; }
+
+            const res = await fetch(`/api/public/events/${SLUG}/bookings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ slot_id: SELECTED_SLOT.id, name, email, custom_field_answers: answers })
+            });
+            const data = await res.json();
+
+            if (!res.ok) { errEl.textContent = data.error || 'Something went wrong — please try again.'; return; }
+
+            renderConfirmation(data.booking);
+        }
+
+        function renderConfirmation(booking) {
+            const isWaitlist = booking.status === 'waitlisted';
+            document.getElementById('content').innerHTML = `
+                <div class="confirm-screen">
+                    <h2>${isWaitlist ? "You're on the waitlist" : "You're confirmed"}</h2>
+                    <p class="meta">${esc(EVENT.name)}</p>
+                    <div class="confirm-links">
+                        <a href="${booking.cancel_url}">Cancel</a>
+                        ${booking.reschedule_url ? `<a href="${booking.reschedule_url}">Reschedule</a>` : ''}
+                    </div>
+                </div>`;
+        }
+    </script>
+</body>
+</html>

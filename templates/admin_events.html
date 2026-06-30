@@ -38,8 +38,6 @@
             <button class="bk-btn" id="new-event-btn"><i class="ti ti-plus"></i> New Event</button>
         </div>
 
-        <div id="warning-banner" class="bk-warning-banner bk-hidden"></div>
-
         <div class="bk-card bk-hidden" id="new-event-card">
             <h2>New Event</h2>
             <div class="bk-form-grid">
@@ -170,14 +168,6 @@
             if (!res.ok) {
                 showToast(data.error || 'Could not create event', 'error');
                 return;
-            }
-
-            const banner = document.getElementById('warning-banner');
-            if (data.warning) {
-                banner.textContent = data.warning;
-                banner.classList.remove('bk-hidden');
-            } else {
-                banner.classList.add('bk-hidden');
             }
 
             document.getElementById('new-event-card').classList.add('bk-hidden');

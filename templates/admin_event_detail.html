@@ -39,6 +39,14 @@
             <span id="event-status-pill"></span>
         </div>
 
+        <div class="bk-card" style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+            <div>
+                <div style="font-size:13px; color:var(--body-text-65,rgba(255,255,255,0.65)); margin-bottom:4px;">Public booking link</div>
+                <code id="public-link-text" style="font-size:13px;"></code>
+            </div>
+            <button class="bk-btn bk-btn-secondary" id="copy-link-btn">Copy Link</button>
+        </div>
+
         <!-- Event meta -->
         <div class="bk-card">
             <h2>Event Details</h2>
@@ -200,10 +208,10 @@
         <div class="bk-card">
             <h2>Bookings</h2>
             <table class="bk-table">
-                <thead><tr><th>Name</th><th>Email</th><th>Slot</th><th>Status</th></tr></thead>
+                <thead><tr><th>Name</th><th>Email</th><th>Slot</th><th>Status</th><th></th></tr></thead>
                 <tbody id="bookings-tbody"></tbody>
             </table>
-            <div class="bk-empty-state bk-hidden" id="bookings-empty">No bookings yet — the public booking page isn't live yet.</div>
+            <div class="bk-empty-state bk-hidden" id="bookings-empty">No bookings yet.</div>
         </div>
     </main>
 
@@ -257,6 +265,15 @@
 
             document.getElementById('event-title').textContent = ev.name;
             document.getElementById('event-status-pill').innerHTML = `<span class="bk-status-pill bk-status-${ev.status}">${ev.status}</span>`;
+            const publicUrl = `${window.location.origin}/book/${ev.slug}`;
+            document.getElementById('public-link-text').textContent = publicUrl;
+            document.getElementById('copy-link-btn').onclick = () => {
+                navigator.clipboard.writeText(publicUrl);
+                showToast('Link copied', 'success');
+            };
+            if (ev.status !== 'active') {
+                showToast('Heads up — the public link only works once this event is Active', 'warning');
+            }
             document.getElementById('ev-name').value = ev.name;
             document.getElementById('ev-job').value = ev.job_number;
             document.getElementById('ev-location').value = ev.location || '';
@@ -478,14 +495,27 @@
 
             data.bookings.forEach(b => {
                 const tr = document.createElement('tr');
+                const promoteBtn = b.status === 'waitlisted'
+                    ? `<button class="bk-btn" onclick="promoteBooking(${b.id})">Promote</button>`
+                    : '';
                 tr.innerHTML = `
                     <td>${esc(b.name)}</td>
                     <td>${esc(b.email)}</td>
                     <td>${fmtDateTime(b.start_time)}</td>
                     <td>${esc(b.status)}</td>
+                    <td style="text-align:right;">${promoteBtn}</td>
                 `;
                 tbody.appendChild(tr);
             });
+        }
+
+        async function promoteBooking(id) {
+            const res = await fetch(`/api/bookings/${id}/promote`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not promote', 'error'); return; }
+            showToast('Promoted to confirmed', 'success');
+            loadBookings();
+            loadSlots();
         }
     </script>
 </body>
