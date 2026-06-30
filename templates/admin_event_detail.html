@@ -242,7 +242,7 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             ajInitHeader({ toolName: 'Bookings' });
-            loadEvent();
+            loadEvent(true);
             loadSlotRules();
             loadSlots();
             loadFormFields();
@@ -297,11 +297,17 @@
                 if (!q) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
 
                 const jobs = await ensureJobsLoaded();
-                const matches = jobs.filter(j =>
-                    String(j.job_number).includes(q) ||
-                    (j.client_name || '').toLowerCase().includes(q) ||
-                    (j.job_name || '').toLowerCase().includes(q)
-                ).slice(0, 8);
+                const currentYear = new Date().getFullYear();
+                const matches = jobs.filter(j => {
+                    // Only this year's jobs — jobs with no end_date on record are
+                    // kept rather than hidden, since excluding undated-but-active
+                    // work would defeat the point of the lookup.
+                    const inYear = !j.end_date || new Date(j.end_date).getFullYear() === currentYear;
+                    if (!inYear) return false;
+                    return String(j.job_number).includes(q) ||
+                        (j.client_name || '').toLowerCase().includes(q) ||
+                        (j.job_name || '').toLowerCase().includes(q);
+                }).slice(0, 8);
 
                 if (matches.length === 0) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
 
@@ -330,7 +336,7 @@
         }
 
         // ── Event meta ──────────────────────────────────────────────────────
-        async function loadEvent() {
+        async function loadEvent(showReminder) {
             const res = await fetch(`/api/events/${EVENT_ID}`);
             const data = await res.json();
             if (!res.ok) { showToast('Event not found', 'error'); return; }
@@ -345,8 +351,8 @@
                 navigator.clipboard.writeText(publicUrl);
                 showToast('Link copied', 'success');
             };
-            if (ev.status !== 'active') {
-                showToast('Heads up — the public link only works once this event is Active', 'warning');
+            if (showReminder && ev.status !== 'active') {
+                showToast('Heads up — the public link only works once this event is Active', 'info');
             }
             document.getElementById('ev-name').value = ev.name;
             document.getElementById('ev-job').value = ev.job_number;

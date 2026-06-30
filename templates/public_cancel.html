@@ -62,8 +62,10 @@
     </div>
 
     <script>
+        const TOKEN = {{ token | tojson }};
+
         async function doCancel() {
-            const res = await fetch('/api/public/bookings/{{ token }}/cancel', { method: 'POST' });
+            const res = await fetch('/api/public/bookings/' + TOKEN + '/cancel', { method: 'POST' });
             const data = await res.json();
             if (!res.ok) {
                 document.getElementById('error-area').textContent = data.error || 'Something went wrong.';

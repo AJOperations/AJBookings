@@ -1,10 +1,11 @@
 """
 Bookings — AJ internal scheduling/booking tool.
 
-Admin-internal app (any logged-in AJ user, no role restriction). Public
-booking surface (/book/<event_slug>) is NOT yet built — this pass covers
-admin event setup, manual + cadence-generated slots, and custom form
-field definitions. See app-state-bookings.md for what's built vs. open.
+Admin-internal app (any logged-in AJ user, no role restriction):
+event setup, manual + cadence-generated slots, custom form fields.
+Public booking surface (/book/<slug>): calendar-based slot picking,
+booking/waitlist, cancel + reschedule via token links. Email is stubbed
+(logs only) until HQ's /api/mailgun/send proxy exists.
 
 Architecture: same pattern as Invoice Tracker — standalone Railway app,
 aj_auth.py for admin auth, HQ proxy block for shared reference data.
@@ -19,10 +20,10 @@ import sqlite3
 from datetime import datetime, date, timedelta
 
 import requests as req
-from flask import Flask, request, jsonify, g, session, render_template, abort
+from flask import Flask, request, jsonify, g, session, render_template
 from flask_cors import CORS
 
-from aj_auth import require_auth, get_current_user, has_tag
+from aj_auth import require_auth, get_current_user
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -70,11 +71,8 @@ _HQ_TIMEOUT = 5
 
 # Days-of-week convention: Python date.weekday() — Monday=0 ... Sunday=6.
 # Used consistently in slot_rules.days_of_week and the cadence generator.
-WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
 VALID_FIELD_TYPES = ('text', 'select', 'checkbox')
 VALID_EVENT_STATUSES = ('draft', 'active', 'closed')
-VALID_BOOKING_STATUSES = ('confirmed', 'waitlisted', 'cancelled')
 
 # Cap how much a single cadence rule can generate in one call — guards
 # against a typo'd date range (e.g. wrong century) silently trying to
@@ -191,7 +189,6 @@ def init_db():
     row = db.execute("SELECT version FROM schema_meta WHERE id = 1").fetchone()
     current = row[0] if row else 0
 
-    # if current < 2:
     if current < 2:
         cols = get_cols(db, 'events')
         if 'cover_image_url' not in cols:
@@ -646,7 +643,7 @@ def create_slot_rule(event_id):
     try:
         start_date = date.fromisoformat(body.get('start_date', ''))
         end_date = date.fromisoformat(body.get('end_date', ''))
-    except ValueError:
+    except (ValueError, TypeError):
         return jsonify({'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
 
     if end_date < start_date:
@@ -664,7 +661,7 @@ def create_slot_rule(event_id):
     try:
         start_time = datetime.strptime(body.get('start_time', ''), '%H:%M').time()
         end_time = datetime.strptime(body.get('end_time', ''), '%H:%M').time()
-    except ValueError:
+    except (ValueError, TypeError):
         return jsonify({'error': 'start_time and end_time must be HH:MM (24-hour)'}), 400
 
     if end_time <= start_time:
@@ -771,7 +768,7 @@ def create_manual_slot(event_id):
     try:
         start_time = datetime.fromisoformat(body.get('start_time', ''))
         end_time = datetime.fromisoformat(body.get('end_time', ''))
-    except ValueError:
+    except (ValueError, TypeError):
         return jsonify({'error': 'start_time and end_time must be ISO datetimes'}), 400
 
     if end_time <= start_time:
@@ -813,7 +810,7 @@ def update_slot(slot_id):
         try:
             start_time = datetime.fromisoformat(body.get('start_time', existing['start_time']))
             end_time = datetime.fromisoformat(body.get('end_time', existing['end_time']))
-        except ValueError:
+        except (ValueError, TypeError):
             return jsonify({'error': 'start_time and end_time must be ISO datetimes'}), 400
         if end_time <= start_time:
             return jsonify({'error': 'end_time must be after start_time'}), 400

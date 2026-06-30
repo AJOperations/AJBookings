@@ -191,8 +191,6 @@
             if (EVENT.directions) {
                 html += `<div class="directions"><strong>Getting there</strong>${esc(EVENT.directions)}</div>`;
             }
-            document.getElementById('content').insertAdjacentHTML('beforebegin', '');
-            // Header content stays put above #content; injected once here via a wrapper.
             const existing = document.getElementById('header-block');
             if (existing) existing.remove();
             const block = document.createElement('div');
