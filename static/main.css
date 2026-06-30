@@ -1,4 +1,6 @@
-/* Bookings — app-specific styles only. All tokens come from aj-theme.css. */
+/* Bookings — app-specific layout only. Cards, buttons, pills, and inputs
+   all come from aj-theme.css (.aj-card, .aj-btn, .aj-pill-*, global input
+   styles) — this file adds structure/spacing on top, never color. */
 
 .bk-page {
     max-width: 1100px;
@@ -24,7 +26,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--body-text-70, rgba(255,255,255,0.7));
+    color: var(--text-muted);
     text-decoration: none;
     font-size: 14px;
     margin-bottom: 12px;
@@ -34,9 +36,8 @@
     color: var(--teal);
 }
 
+/* Card padding only — .aj-card from aj-theme.css owns background/border/radius/hover */
 .bk-card {
-    background: var(--card-bg);
-    border-radius: 10px;
     padding: 20px 24px;
     margin-bottom: 20px;
 }
@@ -55,60 +56,23 @@
 .bk-table th {
     text-align: left;
     padding: 10px 12px;
+    font-family: var(--font-display);
+    font-size: 11px;
     font-weight: 600;
-    color: var(--body-text-65, rgba(255,255,255,0.65));
-    border-bottom: 1px solid var(--card-bg);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    border-bottom: 0.5px solid var(--border2);
 }
 
 .bk-table td {
     padding: 10px 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 0.5px solid var(--border2);
+    color: var(--body-text-85);
 }
 
 .bk-table tr:last-child td {
     border-bottom: none;
-}
-
-.bk-status-pill {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-}
-
-.bk-status-draft   { background: rgba(94,110,126,0.25); color: var(--body-text-85, rgba(255,255,255,0.85)); }
-.bk-status-active  { background: rgba(116,227,169,0.2); color: var(--green); }
-.bk-status-closed  { background: rgba(94,110,126,0.25); color: var(--body-text-65, rgba(255,255,255,0.65)); }
-
-.bk-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--teal);
-    color: #000;
-    border: none;
-    border-radius: 8px;
-    padding: 9px 16px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.bk-btn:hover { opacity: 0.9; }
-
-.bk-btn-secondary {
-    background: transparent;
-    color: var(--body-text-85, rgba(255,255,255,0.85));
-    border: 1px solid rgba(255,255,255,0.15);
-}
-
-.bk-btn-danger {
-    background: transparent;
-    color: #e8617a;
-    border: 1px solid rgba(232,97,122,0.4);
 }
 
 .bk-form-row {
@@ -116,28 +80,6 @@
     flex-direction: column;
     gap: 6px;
     margin-bottom: 14px;
-}
-
-.bk-form-row label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--body-text-85, rgba(255,255,255,0.85));
-}
-
-.bk-form-row input[type="text"],
-.bk-form-row input[type="number"],
-.bk-form-row input[type="date"],
-.bk-form-row input[type="time"],
-.bk-form-row input[type="datetime-local"],
-.bk-form-row select,
-.bk-form-row textarea {
-    background: var(--card-bg);
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 6px;
-    padding: 9px 12px;
-    font-size: 14px;
-    color: inherit;
-    font-family: inherit;
 }
 
 .bk-form-row-inline {
@@ -160,11 +102,12 @@
 
 .bk-day-chip {
     padding: 6px 12px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: var(--radius-pill);
+    border: 0.5px solid var(--border2);
     font-size: 13px;
     cursor: pointer;
     user-select: none;
+    color: var(--text);
 }
 
 .bk-day-chip.selected {
@@ -174,7 +117,7 @@
 }
 
 .bk-empty-state {
-    color: var(--body-text-65, rgba(255,255,255,0.65));
+    color: var(--text-dim);
     font-size: 14px;
     padding: 24px 0;
     text-align: center;
@@ -182,19 +125,11 @@
 
 .bk-hidden { display: none; }
 
-.bk-warning-banner {
-    background: rgba(232, 161, 97, 0.12);
-    border: 1px solid rgba(232, 161, 97, 0.3);
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 13px;
-    margin-bottom: 16px;
-}
-
 .bk-source-tag {
     font-size: 11px;
     padding: 2px 8px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.08);
-    color: var(--body-text-65, rgba(255,255,255,0.65));
+    border-radius: var(--radius-pill);
+    background: var(--surface2);
+    color: var(--text-dim);
+    border: 0.5px solid var(--border);
 }

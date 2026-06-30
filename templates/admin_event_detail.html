@@ -39,16 +39,16 @@
             <span id="event-status-pill"></span>
         </div>
 
-        <div class="bk-card" style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+        <div class="aj-card bk-card" style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
             <div>
-                <div style="font-size:13px; color:var(--body-text-65,rgba(255,255,255,0.65)); margin-bottom:4px;">Public booking link</div>
+                <div style="font-size:13px; color:var(--text-dim); margin-bottom:4px;">Public booking link</div>
                 <code id="public-link-text" style="font-size:13px;"></code>
             </div>
-            <button class="bk-btn bk-btn-secondary" id="copy-link-btn">Copy Link</button>
+            <button class="aj-btn aj-btn-ghost" id="copy-link-btn">Copy Link</button>
         </div>
 
         <!-- Event meta -->
-        <div class="bk-card">
+        <div class="aj-card bk-card">
             <h2>Event Details</h2>
             <div class="bk-form-grid">
                 <div class="bk-form-row">
@@ -85,11 +85,31 @@
                 <span style="width:16px"></span>
                 <input type="checkbox" id="ev-reschedule"> <label for="ev-reschedule" style="margin:0">Allow reschedule</label>
             </div>
-            <button class="bk-btn" id="save-event-btn" style="margin-top:8px;">Save Changes</button>
+
+            <h2 style="margin-top:24px; padding-top:20px; border-top:0.5px solid var(--border2);">Public Page Branding</h2>
+            <div class="bk-form-grid">
+                <div class="bk-form-row">
+                    <label for="ev-image">Cover Image URL</label>
+                    <input type="text" id="ev-image" placeholder="https://… (paste a hosted image link)">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ev-color">Brand Color</label>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="color" id="ev-color" style="width:44px; height:38px; padding:2px; cursor:pointer;">
+                        <input type="text" id="ev-color-hex" placeholder="#1a1a1a" style="flex:1;">
+                    </div>
+                </div>
+            </div>
+            <div class="bk-form-row">
+                <label for="ev-directions">Directions</label>
+                <textarea id="ev-directions" rows="2" placeholder="Parking, building entrance, floor — anything a client needs to actually find you"></textarea>
+            </div>
+
+            <button class="aj-btn aj-btn-primary" id="save-event-btn" style="margin-top:8px;">Save Changes</button>
         </div>
 
         <!-- Cadence generator -->
-        <div class="bk-card">
+        <div class="aj-card bk-card">
             <h2>Generate Slots — Cadence</h2>
             <div class="bk-form-grid">
                 <div class="bk-form-row">
@@ -129,13 +149,13 @@
                     <span class="bk-day-chip" data-val="6">Sun</span>
                 </div>
             </div>
-            <button class="bk-btn" id="generate-slots-btn" style="margin-top:4px;">Generate Slots</button>
+            <button class="aj-btn aj-btn-primary" id="generate-slots-btn" style="margin-top:4px;">Generate Slots</button>
 
             <div id="slot-rules-list" style="margin-top:20px;"></div>
         </div>
 
         <!-- Manual slots -->
-        <div class="bk-card">
+        <div class="aj-card bk-card">
             <h2>Add a One-Off Slot</h2>
             <div class="bk-form-grid">
                 <div class="bk-form-row">
@@ -155,11 +175,11 @@
                     <input type="text" id="ms-location" placeholder="optional">
                 </div>
             </div>
-            <button class="bk-btn" id="add-slot-btn">Add Slot</button>
+            <button class="aj-btn aj-btn-primary" id="add-slot-btn">Add Slot</button>
         </div>
 
         <!-- Slots table -->
-        <div class="bk-card">
+        <div class="aj-card bk-card">
             <h2>Slots</h2>
             <table class="bk-table">
                 <thead>
@@ -171,9 +191,9 @@
         </div>
 
         <!-- Form fields -->
-        <div class="bk-card">
+        <div class="aj-card bk-card">
             <h2>Custom Form Fields</h2>
-            <p style="font-size:13px; color:var(--body-text-65,rgba(255,255,255,0.65)); margin-top:-8px;">Beyond name/email, shown to clients on the public booking page.</p>
+            <p style="font-size:13px; color:var(--text-dim); margin-top:-8px;">Beyond name/email, shown to clients on the public booking page.</p>
             <div class="bk-form-grid">
                 <div class="bk-form-row">
                     <label for="ff-label">Label</label>
@@ -195,7 +215,7 @@
             <div class="bk-form-row-inline">
                 <input type="checkbox" id="ff-required"> <label for="ff-required" style="margin:0">Required</label>
             </div>
-            <button class="bk-btn" id="add-field-btn" style="margin-top:4px;">Add Field</button>
+            <button class="aj-btn aj-btn-primary" id="add-field-btn" style="margin-top:4px;">Add Field</button>
 
             <table class="bk-table" style="margin-top:16px;">
                 <thead><tr><th>Label</th><th>Type</th><th>Required</th><th></th></tr></thead>
@@ -205,7 +225,7 @@
         </div>
 
         <!-- Bookings -->
-        <div class="bk-card">
+        <div class="aj-card bk-card">
             <h2>Bookings</h2>
             <table class="bk-table">
                 <thead><tr><th>Name</th><th>Email</th><th>Slot</th><th>Status</th><th></th></tr></thead>
@@ -243,13 +263,16 @@
             document.getElementById('ff-type').addEventListener('change', (e) => {
                 document.getElementById('ff-options-row').classList.toggle('bk-hidden', e.target.value !== 'select');
             });
-        });
 
-        function esc(s) {
-            const d = document.createElement('div');
-            d.textContent = s == null ? '' : String(s);
-            return d.innerHTML;
-        }
+            document.getElementById('ev-color').addEventListener('input', (e) => {
+                document.getElementById('ev-color-hex').value = e.target.value;
+            });
+            document.getElementById('ev-color-hex').addEventListener('input', (e) => {
+                if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
+                    document.getElementById('ev-color').value = e.target.value;
+                }
+            });
+        });
 
         function fmtDateTime(iso) {
             const d = new Date(iso);
@@ -264,7 +287,8 @@
             const ev = data.event;
 
             document.getElementById('event-title').textContent = ev.name;
-            document.getElementById('event-status-pill').innerHTML = `<span class="bk-status-pill bk-status-${ev.status}">${ev.status}</span>`;
+            const pillClass = ev.status === 'active' ? 'aj-pill-success' : 'aj-pill-muted';
+            document.getElementById('event-status-pill').innerHTML = `<span class="aj-pill ${pillClass}">${ev.status}</span>`;
             const publicUrl = `${window.location.origin}/book/${ev.slug}`;
             document.getElementById('public-link-text').textContent = publicUrl;
             document.getElementById('copy-link-btn').onclick = () => {
@@ -282,6 +306,11 @@
             document.getElementById('ev-max-bookings').value = ev.max_bookings_per_email || '';
             document.getElementById('ev-waitlist').checked = !!ev.allow_waitlist;
             document.getElementById('ev-reschedule').checked = !!ev.allow_reschedule;
+            document.getElementById('ev-image').value = ev.cover_image_url || '';
+            document.getElementById('ev-directions').value = ev.directions || '';
+            const color = ev.brand_color || '#1a1a1a';
+            document.getElementById('ev-color').value = color;
+            document.getElementById('ev-color-hex').value = color;
         }
 
         async function saveEvent() {
@@ -294,6 +323,9 @@
                 max_bookings_per_email: document.getElementById('ev-max-bookings').value || null,
                 allow_waitlist: document.getElementById('ev-waitlist').checked,
                 allow_reschedule: document.getElementById('ev-reschedule').checked,
+                cover_image_url: document.getElementById('ev-image').value.trim(),
+                directions: document.getElementById('ev-directions').value.trim(),
+                brand_color: document.getElementById('ev-color-hex').value.trim(),
             };
             const res = await fetch(`/api/events/${EVENT_ID}`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -316,9 +348,9 @@
             container.innerHTML = '<h2 style="font-size:14px; margin-bottom:10px;">Existing Rules</h2>' +
                 data.slot_rules.map(r => {
                     const days = r.days_of_week.map(d => ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d]).join(', ');
-                    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:13px;">
+                    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:0.5px solid var(--border2); font-size:13px;">
                         <span>${r.start_date} → ${r.end_date} · ${days} · ${r.start_time}–${r.end_time} · ${r.slot_length_minutes}min · cap ${r.capacity} · <strong>${r.slots_generated} slots</strong></span>
-                        <button class="bk-btn bk-btn-danger" onclick="deleteSlotRule(${r.id})">Delete Rule</button>
+                        <button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteSlotRule(${r.id})">Delete Rule</button>
                     </div>`;
                 }).join('');
         }
@@ -385,7 +417,7 @@
                     <td>${s.confirmed_count}</td>
                     <td>${s.waitlisted_count}</td>
                     <td><span class="bk-source-tag">${s.source}</span></td>
-                    <td style="text-align:right;"><button class="bk-btn bk-btn-danger" onclick="deleteSlot(${s.id})">Delete</button></td>
+                    <td style="text-align:right;"><button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteSlot(${s.id})">Delete</button></td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -440,7 +472,7 @@
                     <td>${esc(f.label)}</td>
                     <td>${esc(f.field_type)}</td>
                     <td>${f.required ? 'Yes' : 'No'}</td>
-                    <td style="text-align:right;"><button class="bk-btn bk-btn-danger" onclick="deleteFormField(${f.id})">Delete</button></td>
+                    <td style="text-align:right;"><button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteFormField(${f.id})">Delete</button></td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -496,7 +528,7 @@
             data.bookings.forEach(b => {
                 const tr = document.createElement('tr');
                 const promoteBtn = b.status === 'waitlisted'
-                    ? `<button class="bk-btn" onclick="promoteBooking(${b.id})">Promote</button>`
+                    ? `<button class="aj-btn aj-btn-primary aj-btn-sm" onclick="promoteBooking(${b.id})">Promote</button>`
                     : '';
                 tr.innerHTML = `
                     <td>${esc(b.name)}</td>

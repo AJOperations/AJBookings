@@ -11,6 +11,7 @@
             background: #f7f7f8;
             color: #1a1a1a;
             margin: 0;
+            border-top: 4px solid {{ brand_color | default('#1a1a1a') }};
         }
         .wrap {
             max-width: 480px;
@@ -18,6 +19,7 @@
             padding: 60px 20px;
             text-align: center;
         }
+        .event-name { color: #888; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
         h1 { font-size: 22px; margin-bottom: 12px; }
         p { color: #555; font-size: 14px; line-height: 1.5; }
         button {
@@ -38,6 +40,7 @@
 </head>
 <body>
     <div class="wrap">
+        <div class="event-name">{{ event_name }}</div>
         {% if not booking_found %}
             <h1>Link not valid</h1>
             <p>This cancellation link doesn't match any booking. If you think this is a mistake, please reach out directly.</p>

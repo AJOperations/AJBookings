@@ -63,7 +63,7 @@ DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 
 # Current schema version — MUST equal the highest `if current < N` migration
 # block below.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
 _HQ_TIMEOUT = 5
@@ -192,10 +192,15 @@ def init_db():
     current = row[0] if row else 0
 
     # if current < 2:
-    #     cols = get_cols(db, 'events')
-    #     if 'some_new_col' not in cols:
-    #         db.execute("ALTER TABLE events ADD COLUMN some_new_col TEXT")
-    #     current = 2
+    if current < 2:
+        cols = get_cols(db, 'events')
+        if 'cover_image_url' not in cols:
+            db.execute("ALTER TABLE events ADD COLUMN cover_image_url TEXT")
+        if 'brand_color' not in cols:
+            db.execute("ALTER TABLE events ADD COLUMN brand_color TEXT")
+        if 'directions' not in cols:
+            db.execute("ALTER TABLE events ADD COLUMN directions TEXT")
+        current = 2
 
     db.execute(
         "INSERT INTO schema_meta (id, version) VALUES (1, ?) "
@@ -233,10 +238,8 @@ def _row_to_dict(row):
     return dict(row) if row else None
 
 
-def is_valid_job_number(val):
-    """7-digit job number — same validation rule enforced everywhere in
-    the AJ ecosystem (mirrors isValidJobNumber() from aj-utils.js)."""
-    return bool(re.fullmatch(r'\d{7}', str(val or '')))
+def is_valid_hex_color(val):
+    return bool(re.fullmatch(r'#[0-9a-fA-F]{6}', str(val or '').strip()))
 
 
 def _hq_get(path):
@@ -509,9 +512,21 @@ def update_event(event_id):
             return jsonify({'error': f'status must be one of {VALID_EVENT_STATUSES}'}), 400
         fields['status'] = body['status']
 
-    for key in ('location', 'notes'):
+    for key in ('location', 'notes', 'directions'):
         if key in body:
             fields[key] = body[key]
+
+    if 'cover_image_url' in body:
+        url = (body['cover_image_url'] or '').strip()
+        if url and not re.match(r'^https?://', url):
+            return jsonify({'error': 'cover_image_url must start with http:// or https://'}), 400
+        fields['cover_image_url'] = url or None
+
+    if 'brand_color' in body:
+        color = (body['brand_color'] or '').strip()
+        if color and not is_valid_hex_color(color):
+            return jsonify({'error': 'brand_color must be a 6-digit hex value, e.g. #00B3B2'}), 400
+        fields['brand_color'] = color or None
 
     for key in ('allow_waitlist', 'allow_reschedule'):
         if key in body:
@@ -1037,9 +1052,14 @@ def public_booking_page(slug):
 def public_cancel_page(slug, token):
     db = get_db()
     booking = db.execute("SELECT * FROM bookings WHERE cancel_token = ?", (token,)).fetchone()
-    return render_template('public_cancel.html', slug=slug, token=token,
-                            booking_found=booking is not None,
-                            already_cancelled=(booking is not None and booking['status'] == 'cancelled'))
+    event = db.execute("SELECT * FROM events WHERE slug = ?", (slug,)).fetchone()
+    return render_template(
+        'public_cancel.html', slug=slug, token=token,
+        booking_found=booking is not None,
+        already_cancelled=(booking is not None and booking['status'] == 'cancelled'),
+        event_name=(event['name'] if event else 'this event'),
+        brand_color=(event['brand_color'] if event and event['brand_color'] else '#1a1a1a'),
+    )
 
 
 @app.route('/book/<slug>/reschedule/<token>')
@@ -1111,6 +1131,9 @@ def public_get_event(slug):
             'name': event['name'],
             'location': event['location'],
             'notes': event['notes'],
+            'directions': event['directions'],
+            'cover_image_url': event['cover_image_url'],
+            'brand_color': event['brand_color'] or '#1a1a1a',
             'allow_waitlist': bool(event['allow_waitlist']),
             'allow_reschedule': bool(event['allow_reschedule']),
         },

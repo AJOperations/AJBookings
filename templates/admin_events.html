@@ -35,10 +35,10 @@
     <main class="container bk-page">
         <div class="bk-page-header">
             <h1>Events</h1>
-            <button class="bk-btn" id="new-event-btn"><i class="ti ti-plus"></i> New Event</button>
+            <button class="aj-btn aj-btn-primary" id="new-event-btn"><i class="ti ti-plus"></i> New Event</button>
         </div>
 
-        <div class="bk-card bk-hidden" id="new-event-card">
+        <div class="aj-card bk-card bk-hidden" id="new-event-card">
             <h2>New Event</h2>
             <div class="bk-form-grid">
                 <div class="bk-form-row">
@@ -68,12 +68,12 @@
                 <input type="checkbox" id="f-reschedule"> <label for="f-reschedule" style="margin:0">Allow reschedule</label>
             </div>
             <div style="display:flex; gap:10px; margin-top:8px;">
-                <button class="bk-btn" id="create-event-btn">Create Event</button>
-                <button class="bk-btn bk-btn-secondary" id="cancel-new-event-btn">Cancel</button>
+                <button class="aj-btn aj-btn-primary" id="create-event-btn">Create Event</button>
+                <button class="aj-btn aj-btn-ghost" id="cancel-new-event-btn">Cancel</button>
             </div>
         </div>
 
-        <div class="bk-card">
+        <div class="aj-card bk-card">
             <table class="bk-table">
                 <thead>
                     <tr>
@@ -107,7 +107,8 @@
         });
 
         function statusPill(status) {
-            return `<span class="bk-status-pill bk-status-${status}">${status}</span>`;
+            const pillClass = status === 'active' ? 'aj-pill-success' : 'aj-pill-muted';
+            return `<span class="aj-pill ${pillClass}">${status}</span>`;
         }
 
         async function loadEvents() {
@@ -133,17 +134,11 @@
                     <td>${ev.booking_count}</td>
                     <td>${esc(ev.owner_name || '—')}</td>
                     <td style="text-align:right;">
-                        <button class="bk-btn bk-btn-danger" data-id="${ev.id}" data-name="${esc(ev.name)}" onclick="deleteEvent(${ev.id}, this)">Delete</button>
+                        <button class="aj-btn aj-btn-danger aj-btn-sm" data-id="${ev.id}" data-name="${esc(ev.name)}" onclick="deleteEvent(${ev.id}, this)">Delete</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
             });
-        }
-
-        function esc(s) {
-            const d = document.createElement('div');
-            d.textContent = s == null ? '' : String(s);
-            return d.innerHTML;
         }
 
         async function createEvent() {
@@ -156,7 +151,7 @@
             const max_bookings_per_email = document.getElementById('f-max-bookings').value || null;
 
             if (!name) { showToast('Name is required', 'error'); return; }
-            if (!/^\d{7}$/.test(job_number)) { showToast('Job number must be exactly 7 digits', 'error'); return; }
+            if (!isValidJobNumber(job_number)) { showToast('Job number must be exactly 7 digits', 'error'); return; }
 
             const res = await fetch('/api/events', {
                 method: 'POST',

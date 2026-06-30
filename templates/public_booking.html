@@ -6,44 +6,40 @@
     <title>Book a Time</title>
     <style>
         * { box-sizing: border-box; }
+        :root { --brand: #1a1a1a; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
             background: #f7f7f8;
             color: #1a1a1a;
             margin: 0;
-            padding: 0;
         }
-        .wrap {
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 40px 20px 80px;
+        .wrap { max-width: 600px; margin: 0 auto; padding: 0 20px 80px; }
+        .hero {
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+            border-radius: 0 0 16px 16px;
+            margin-bottom: 24px;
+            display: block;
         }
+        .top-pad { padding-top: 40px; }
         h1 { font-size: 24px; margin: 0 0 4px; }
-        .meta { color: #666; font-size: 14px; margin-bottom: 4px; }
-        .notes { color: #444; font-size: 14px; margin: 16px 0 28px; line-height: 1.5; }
-        .banner {
-            background: #fff4e5;
-            border: 1px solid #f0c98a;
-            border-radius: 8px;
-            padding: 12px 16px;
-            font-size: 14px;
-            margin-bottom: 20px;
-        }
-        .banner.error { background: #fdecec; border-color: #e8a1a1; }
-        .day-group { margin-bottom: 24px; }
-        .day-group h3 { font-size: 14px; color: #888; margin: 0 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-        .slot-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+        .meta { color: #666; font-size: 14px; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
+        .notes { color: #444; font-size: 14px; margin: 16px 0 8px; line-height: 1.5; }
+        .directions {
             background: #fff;
             border: 1px solid #e2e2e4;
             border-radius: 8px;
             padding: 12px 16px;
-            margin-bottom: 8px;
+            font-size: 13px;
+            color: #555;
+            margin: 16px 0 28px;
+            line-height: 1.5;
         }
-        .slot-time { font-size: 15px; font-weight: 600; }
-        .slot-tag { font-size: 12px; color: #888; margin-left: 8px; }
+        .directions strong { color: #1a1a1a; display: block; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+        .banner { background: #fff4e5; border: 1px solid #f0c98a; border-radius: 8px; padding: 12px 16px; font-size: 14px; margin: 20px 0; }
+        .banner.error { background: #fdecec; border-color: #e8a1a1; }
+
         button {
             font-family: inherit;
             font-size: 14px;
@@ -53,39 +49,67 @@
             padding: 9px 16px;
             cursor: pointer;
         }
-        .btn-primary { background: #1a1a1a; color: #fff; }
-        .btn-primary:hover { background: #333; }
+        .btn-primary { background: var(--brand); color: #fff; }
+        .btn-primary:hover { opacity: 0.88; }
         .btn-secondary { background: #eee; color: #1a1a1a; }
-        .btn-waitlist { background: #444; color: #fff; }
         .btn-disabled { background: #eee; color: #aaa; cursor: not-allowed; }
-        .form-card {
-            background: #fff;
-            border: 1px solid #e2e2e4;
-            border-radius: 10px;
-            padding: 24px;
-            margin-top: 16px;
+        .btn-text { background: none; padding: 4px 0; color: #666; text-decoration: underline; font-weight: 500; }
+
+        #content { min-height: 320px; }
+
+        /* ── Calendar ─────────────────────────────────────────── */
+        .cal-header { display: flex; align-items: center; justify-content: space-between; margin: 24px 0 12px; }
+        .cal-header h2 { font-size: 16px; margin: 0; }
+        .cal-nav { display: flex; gap: 8px; }
+        .cal-nav button { background: #fff; border: 1px solid #e2e2e4; width: 32px; height: 32px; padding: 0; border-radius: 6px; font-size: 16px; }
+        .cal-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
+        .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+        .cal-dow { text-align: center; font-size: 11px; color: #999; font-weight: 600; text-transform: uppercase; padding-bottom: 4px; }
+        .cal-day {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            font-size: 14px;
+            position: relative;
+            color: #ccc;
         }
+        .cal-day.has-slots { color: #1a1a1a; background: #fff; border: 1px solid #e2e2e4; cursor: pointer; font-weight: 600; }
+        .cal-day.has-slots:hover { background: var(--brand); color: #fff; }
+        .cal-day.today { box-shadow: inset 0 0 0 2px var(--brand); }
+        .cal-empty { color: #888; font-size: 14px; padding: 32px 0; text-align: center; }
+
+        /* ── Times list ───────────────────────────────────────── */
+        .times-list { margin-top: 16px; }
+        .slot-row {
+            display: flex; align-items: center; justify-content: space-between;
+            background: #fff; border: 1px solid #e2e2e4; border-radius: 8px;
+            padding: 12px 16px; margin-bottom: 8px;
+        }
+        .slot-time { font-size: 15px; font-weight: 600; }
+        .slot-tag { font-size: 12px; color: #888; margin-left: 8px; }
+
+        /* ── Form ─────────────────────────────────────────────── */
+        .form-card { background: #fff; border: 1px solid #e2e2e4; border-radius: 10px; padding: 24px; margin-top: 16px; }
         .form-row { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
         .form-row label { font-size: 13px; font-weight: 600; }
         .form-row input[type="text"], .form-row input[type="email"], .form-row select, .form-row textarea {
-            font-size: 14px;
-            padding: 10px 12px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            font-family: inherit;
+            font-size: 14px; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit;
         }
         .checkbox-row { display: flex; align-items: center; gap: 8px; }
-        .empty { color: #888; font-size: 14px; padding: 24px 0; text-align: center; }
         .confirm-screen { text-align: center; padding: 40px 0; }
         .confirm-screen h2 { font-size: 20px; }
         .confirm-links { margin-top: 24px; font-size: 14px; }
-        .confirm-links a { color: #1a1a1a; text-decoration: underline; margin: 0 10px; }
-        .hidden { display: none; }
+        .confirm-links a { color: var(--brand); text-decoration: underline; margin: 0 10px; }
+        .back-link { font-size: 13px; color: #888; text-decoration: none; display: inline-block; margin-bottom: 12px; cursor: pointer; }
+        .back-link:hover { color: #1a1a1a; }
     </style>
 </head>
 <body>
-    <div class="wrap" id="app">
-        <div id="banner-area"></div>
+    <div class="wrap">
+        <img id="hero-img" class="hero" style="display:none;">
+        <div class="top-pad" id="banner-area"></div>
         <div id="content">Loading…</div>
     </div>
 
@@ -97,7 +121,10 @@
         let EVENT = null;
         let SLOTS = [];
         let FIELDS = [];
-        let SELECTED_SLOT = null;
+
+        // Single state object — every view renders from this and writes into
+        // #content. No scrolling between steps; the container is reused.
+        const STATE = { view: 'calendar', currentMonth: null, selectedDate: null, selectedSlot: null };
 
         document.addEventListener('DOMContentLoaded', init);
 
@@ -109,15 +136,26 @@
             if (!res.ok) {
                 document.getElementById('content').innerHTML = `
                     <h1>This event isn't available</h1>
-                    <p class="meta">It may not be published yet, or the link may be incorrect.</p>
-                `;
+                    <p class="meta">It may not be published yet, or the link may be incorrect.</p>`;
                 return;
             }
 
             EVENT = data.event;
             SLOTS = data.slots;
             FIELDS = data.form_fields;
-            renderEvent();
+
+            document.documentElement.style.setProperty('--brand', EVENT.brand_color || '#1a1a1a');
+            if (EVENT.cover_image_url) {
+                const hero = document.getElementById('hero-img');
+                hero.src = EVENT.cover_image_url;
+                hero.style.display = 'block';
+            }
+
+            const firstSlotDate = SLOTS.length ? new Date(SLOTS[0].start_time) : new Date();
+            STATE.currentMonth = new Date(firstSlotDate.getFullYear(), firstSlotDate.getMonth(), 1);
+
+            renderHeader();
+            render();
         }
 
         function renderBanner() {
@@ -131,71 +169,129 @@
             }
         }
 
-        function fmtDay(iso) {
-            return new Date(iso).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-        }
-        function fmtTime(iso) {
-            return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-        }
         function esc(s) {
             const d = document.createElement('div');
             d.textContent = s == null ? '' : String(s);
             return d.innerHTML;
         }
+        function dateKey(d) {
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        }
+        function fmtTime(iso) {
+            return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+        }
+        function fmtDayHeading(d) {
+            return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+        }
 
-        function renderEvent() {
-            const content = document.getElementById('content');
-
+        function renderHeader() {
             let html = `<h1>${esc(EVENT.name)}</h1>`;
             if (EVENT.location) html += `<div class="meta">${esc(EVENT.location)}</div>`;
             if (EVENT.notes) html += `<div class="notes">${esc(EVENT.notes)}</div>`;
+            if (EVENT.directions) {
+                html += `<div class="directions"><strong>Getting there</strong>${esc(EVENT.directions)}</div>`;
+            }
+            document.getElementById('content').insertAdjacentHTML('beforebegin', '');
+            // Header content stays put above #content; injected once here via a wrapper.
+            const existing = document.getElementById('header-block');
+            if (existing) existing.remove();
+            const block = document.createElement('div');
+            block.id = 'header-block';
+            block.innerHTML = html;
+            document.getElementById('content').insertAdjacentElement('beforebegin', block);
+        }
 
+        // ── Dispatcher ───────────────────────────────────────────────────────
+        function render() {
+            const content = document.getElementById('content');
+            if (STATE.view === 'calendar') content.innerHTML = renderCalendarView();
+            else if (STATE.view === 'times') content.innerHTML = renderTimesView();
+            else if (STATE.view === 'form') content.innerHTML = renderFormView();
+            wireViewEvents();
+        }
+
+        function slotsByDate() {
+            const map = {};
+            SLOTS.forEach(s => {
+                const key = dateKey(new Date(s.start_time));
+                (map[key] = map[key] || []).push(s);
+            });
+            return map;
+        }
+
+        // ── Calendar view ────────────────────────────────────────────────────
+        function renderCalendarView() {
             if (SLOTS.length === 0) {
-                html += `<div class="empty">No times are currently available.</div>`;
-                content.innerHTML = html;
-                return;
+                return `<div class="cal-empty">No times are currently available.</div>`;
             }
 
-            const byDay = {};
-            SLOTS.forEach(s => {
-                const day = fmtDay(s.start_time);
-                (byDay[day] = byDay[day] || []).push(s);
-            });
+            const byDate = slotsByDate();
+            const month = STATE.currentMonth;
+            const year = month.getFullYear(), m = month.getMonth();
+            const firstDow = new Date(year, m, 1).getDay();
+            const daysInMonth = new Date(year, m + 1, 0).getDate();
+            const today = new Date(); today.setHours(0,0,0,0);
 
-            html += `<div id="slots-area">`;
-            Object.entries(byDay).forEach(([day, slots]) => {
-                html += `<div class="day-group"><h3>${day}</h3>`;
-                slots.forEach(s => {
-                    const label = s.state === 'waitlist' ? 'Join Waitlist' : (s.state === 'full' ? 'Full' : 'Book');
-                    const btnClass = s.state === 'waitlist' ? 'btn-waitlist' : (s.state === 'full' ? 'btn-disabled' : 'btn-primary');
-                    const disabled = s.state === 'full' ? 'disabled' : '';
-                    html += `
-                        <div class="slot-row">
-                            <div>
-                                <span class="slot-time">${fmtTime(s.start_time)}–${fmtTime(s.end_time)}</span>
-                                ${s.state === 'waitlist' ? '<span class="slot-tag">Waitlist only</span>' : ''}
-                                ${s.location_override ? `<span class="slot-tag">${esc(s.location_override)}</span>` : ''}
-                            </div>
-                            <button class="${btnClass}" ${disabled} onclick="selectSlot(${s.id})">${label}</button>
-                        </div>`;
-                });
-                html += `</div>`;
-            });
-            html += `</div><div id="form-area"></div>`;
+            const minMonth = new Date(new Date(SLOTS[0].start_time).getFullYear(), new Date(SLOTS[0].start_time).getMonth(), 1);
+            const maxMonth = new Date(new Date(SLOTS[SLOTS.length-1].start_time).getFullYear(), new Date(SLOTS[SLOTS.length-1].start_time).getMonth(), 1);
+            const canPrev = month > minMonth;
+            const canNext = month < maxMonth;
 
-            content.innerHTML = html;
+            let html = `
+                <div class="cal-header">
+                    <h2>${month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h2>
+                    <div class="cal-nav">
+                        <button id="cal-prev" ${canPrev ? '' : 'disabled'}>‹</button>
+                        <button id="cal-next" ${canNext ? '' : 'disabled'}>›</button>
+                    </div>
+                </div>
+                <div class="cal-grid">
+                    ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => `<div class="cal-dow">${d}</div>`).join('')}
+                    ${Array(firstDow).fill('<div></div>').join('')}
+            `;
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const d = new Date(year, m, day);
+                const key = dateKey(d);
+                const hasSlots = !!byDate[key];
+                const isToday = d.getTime() === today.getTime();
+                const classes = ['cal-day'];
+                if (hasSlots) classes.push('has-slots');
+                if (isToday) classes.push('today');
+                html += `<div class="${classes.join(' ')}" ${hasSlots ? `data-date="${key}"` : ''}>${day}</div>`;
+            }
+            html += `</div>`;
+            return html;
         }
 
-        function selectSlot(slotId) {
-            SELECTED_SLOT = SLOTS.find(s => s.id === slotId);
-            renderForm();
-            document.getElementById('form-area').scrollIntoView({ behavior: 'smooth' });
+        // ── Times view ───────────────────────────────────────────────────────
+        function renderTimesView() {
+            const byDate = slotsByDate();
+            const slots = byDate[STATE.selectedDate] || [];
+            const dateObj = new Date(STATE.selectedDate + 'T00:00:00');
+
+            let html = `<a class="back-link" data-back="calendar">‹ All dates</a>`;
+            html += `<h2 style="font-size:16px; margin:0 0 12px;">${fmtDayHeading(dateObj)}</h2>`;
+            html += `<div class="times-list">`;
+            slots.sort((a,b) => new Date(a.start_time) - new Date(b.start_time)).forEach(s => {
+                const label = s.state === 'waitlist' ? 'Join Waitlist' : 'Book';
+                html += `
+                    <div class="slot-row">
+                        <div>
+                            <span class="slot-time">${fmtTime(s.start_time)}–${fmtTime(s.end_time)}</span>
+                            ${s.state === 'waitlist' ? '<span class="slot-tag">Waitlist only</span>' : ''}
+                            ${s.location_override ? `<span class="slot-tag">${esc(s.location_override)}</span>` : ''}
+                        </div>
+                        <button class="btn-primary" data-slot="${s.id}">${label}</button>
+                    </div>`;
+            });
+            html += `</div>`;
+            return html;
         }
 
-        function renderForm() {
-            const area = document.getElementById('form-area');
-            const isWaitlist = SELECTED_SLOT.state === 'waitlist';
-
+        // ── Form view ────────────────────────────────────────────────────────
+        function renderFormView() {
+            const isWaitlist = STATE.selectedSlot.state === 'waitlist';
             let fieldsHtml = '';
             FIELDS.forEach(f => {
                 if (f.field_type === 'text') {
@@ -222,25 +318,54 @@
                 }
             });
 
-            area.innerHTML = `
+            return `
+                <a class="back-link" data-back="times">‹ Other times</a>
                 <div class="form-card">
-                    <h2 style="margin:0 0 4px; font-size:16px;">${fmtTime(SELECTED_SLOT.start_time)}–${fmtTime(SELECTED_SLOT.end_time)}</h2>
+                    <h2 style="margin:0 0 4px; font-size:16px;">${fmtTime(STATE.selectedSlot.start_time)}–${fmtTime(STATE.selectedSlot.end_time)}</h2>
                     ${isWaitlist ? '<p style="font-size:13px; color:#888; margin-top:0;">This time is full — submitting joins the waitlist.</p>' : ''}
-                    <div class="form-row">
-                        <label>Name *</label>
-                        <input type="text" id="bk-name">
-                    </div>
-                    <div class="form-row">
-                        <label>Email *</label>
-                        <input type="email" id="bk-email">
-                    </div>
+                    <div class="form-row"><label>Name *</label><input type="text" id="bk-name"></div>
+                    <div class="form-row"><label>Email *</label><input type="email" id="bk-email"></div>
                     ${fieldsHtml}
-                    <button class="btn-primary" id="submit-btn" onclick="submitBooking()">${isWaitlist ? 'Join Waitlist' : 'Confirm Booking'}</button>
-                    <button class="btn-secondary" onclick="document.getElementById('form-area').innerHTML=''">Cancel</button>
+                    <button class="btn-primary" id="submit-btn">${isWaitlist ? 'Join Waitlist' : 'Confirm Booking'}</button>
                     <div id="form-error" style="color:#c0392b; font-size:13px; margin-top:10px;"></div>
                 </div>`;
         }
 
+        // ── Event wiring (re-run after every render) ────────────────────────
+        function wireViewEvents() {
+            document.getElementById('cal-prev')?.addEventListener('click', () => {
+                STATE.currentMonth = new Date(STATE.currentMonth.getFullYear(), STATE.currentMonth.getMonth() - 1, 1);
+                render();
+            });
+            document.getElementById('cal-next')?.addEventListener('click', () => {
+                STATE.currentMonth = new Date(STATE.currentMonth.getFullYear(), STATE.currentMonth.getMonth() + 1, 1);
+                render();
+            });
+            document.querySelectorAll('.cal-day.has-slots').forEach(el => {
+                el.addEventListener('click', () => {
+                    STATE.selectedDate = el.dataset.date;
+                    STATE.view = 'times';
+                    render();
+                });
+            });
+            document.querySelectorAll('[data-back]').forEach(el => {
+                el.addEventListener('click', () => {
+                    STATE.view = el.dataset.back;
+                    render();
+                });
+            });
+            document.querySelectorAll('[data-slot]').forEach(el => {
+                el.addEventListener('click', () => {
+                    const slotId = parseInt(el.dataset.slot);
+                    STATE.selectedSlot = SLOTS.find(s => s.id === slotId);
+                    STATE.view = 'form';
+                    render();
+                });
+            });
+            document.getElementById('submit-btn')?.addEventListener('click', submitBooking);
+        }
+
+        // ── Submit ───────────────────────────────────────────────────────────
         async function submitBooking() {
             const name = document.getElementById('bk-name').value.trim();
             const email = document.getElementById('bk-email').value.trim();
@@ -267,10 +392,9 @@
             const res = await fetch(`/api/public/events/${SLUG}/bookings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ slot_id: SELECTED_SLOT.id, name, email, custom_field_answers: answers })
+                body: JSON.stringify({ slot_id: STATE.selectedSlot.id, name, email, custom_field_answers: answers })
             });
             const data = await res.json();
-
             if (!res.ok) { errEl.textContent = data.error || 'Something went wrong — please try again.'; return; }
 
             renderConfirmation(data.booking);
@@ -278,10 +402,11 @@
 
         function renderConfirmation(booking) {
             const isWaitlist = booking.status === 'waitlisted';
+            document.getElementById('header-block')?.remove();
             document.getElementById('content').innerHTML = `
                 <div class="confirm-screen">
                     <h2>${isWaitlist ? "You're on the waitlist" : "You're confirmed"}</h2>
-                    <p class="meta">${esc(EVENT.name)}</p>
+                    <p class="meta" style="justify-content:center;">${esc(EVENT.name)}</p>
                     <div class="confirm-links">
                         <a href="${booking.cancel_url}">Cancel</a>
                         ${booking.reschedule_url ? `<a href="${booking.reschedule_url}">Reschedule</a>` : ''}
