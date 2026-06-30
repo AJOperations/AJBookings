@@ -55,9 +55,10 @@
                     <label for="ev-name">Name</label>
                     <input type="text" id="ev-name">
                 </div>
-                <div class="bk-form-row">
+                <div class="bk-form-row" style="position:relative;">
                     <label for="ev-job">Job Number</label>
-                    <input type="text" id="ev-job" maxlength="7">
+                    <input type="text" id="ev-job" autocomplete="off">
+                    <div id="ev-job-suggestions" class="bk-suggestions bk-hidden"></div>
                 </div>
                 <div class="bk-form-row">
                     <label for="ev-location">Location</label>
@@ -246,6 +247,7 @@
             loadSlots();
             loadFormFields();
             loadBookings();
+            wireJobAutocomplete('ev-job', 'ev-job-suggestions');
 
             document.getElementById('save-event-btn').addEventListener('click', saveEvent);
             document.getElementById('generate-slots-btn').addEventListener('click', generateSlots);
@@ -277,6 +279,54 @@
         function fmtDateTime(iso) {
             const d = new Date(iso);
             return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        }
+
+        let _jobsListCache = null;
+        async function ensureJobsLoaded() {
+            if (_jobsListCache) return _jobsListCache;
+            _jobsListCache = await getJobs();
+            return _jobsListCache;
+        }
+
+        function wireJobAutocomplete(inputId, dropdownId) {
+            const input = document.getElementById(inputId);
+            const dropdown = document.getElementById(dropdownId);
+
+            input.addEventListener('input', async () => {
+                const q = input.value.trim().toLowerCase();
+                if (!q) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
+
+                const jobs = await ensureJobsLoaded();
+                const matches = jobs.filter(j =>
+                    String(j.job_number).includes(q) ||
+                    (j.client_name || '').toLowerCase().includes(q) ||
+                    (j.job_name || '').toLowerCase().includes(q)
+                ).slice(0, 8);
+
+                if (matches.length === 0) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
+
+                dropdown.innerHTML = matches.map(j => `
+                    <div class="bk-suggestion-item" data-job="${j.job_number}">
+                        <div>${esc(j.job_number)} — ${esc(j.client_name || '')}</div>
+                        <div class="bk-suggestion-meta">${esc(j.job_name || '')}</div>
+                    </div>
+                `).join('');
+                dropdown.classList.remove('bk-hidden');
+
+                dropdown.querySelectorAll('.bk-suggestion-item').forEach(item => {
+                    item.addEventListener('click', () => {
+                        input.value = item.dataset.job;
+                        dropdown.classList.add('bk-hidden');
+                        dropdown.innerHTML = '';
+                    });
+                });
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.add('bk-hidden');
+                }
+            });
         }
 
         // ── Event meta ──────────────────────────────────────────────────────

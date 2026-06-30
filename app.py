@@ -238,6 +238,12 @@ def _row_to_dict(row):
     return dict(row) if row else None
 
 
+def is_valid_job_number(val):
+    """7-digit job number — same validation rule enforced everywhere in
+    the AJ ecosystem (mirrors isValidJobNumber() from aj-utils.js)."""
+    return bool(re.fullmatch(r'\d{7}', str(val or '')))
+
+
 def is_valid_hex_color(val):
     return bool(re.fullmatch(r'#[0-9a-fA-F]{6}', str(val or '').strip()))
 

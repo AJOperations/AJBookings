@@ -45,9 +45,10 @@
                     <label for="f-name">Name</label>
                     <input type="text" id="f-name" placeholder="e.g. AbbVie Tasting Series">
                 </div>
-                <div class="bk-form-row">
+                <div class="bk-form-row" style="position:relative;">
                     <label for="f-job">Job Number</label>
-                    <input type="text" id="f-job" placeholder="7-digit job number" maxlength="7">
+                    <input type="text" id="f-job" placeholder="Search by job number, client, or job name" autocomplete="off">
+                    <div id="f-job-suggestions" class="bk-suggestions bk-hidden"></div>
                 </div>
                 <div class="bk-form-row">
                     <label for="f-location">Location</label>
@@ -96,6 +97,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             ajInitHeader({ toolName: 'Bookings' });
             loadEvents();
+            wireJobAutocomplete('f-job', 'f-job-suggestions');
 
             document.getElementById('new-event-btn').addEventListener('click', () => {
                 document.getElementById('new-event-card').classList.remove('bk-hidden');
@@ -105,6 +107,54 @@
             });
             document.getElementById('create-event-btn').addEventListener('click', createEvent);
         });
+
+        let _jobsListCache = null;
+        async function ensureJobsLoaded() {
+            if (_jobsListCache) return _jobsListCache;
+            _jobsListCache = await getJobs();
+            return _jobsListCache;
+        }
+
+        function wireJobAutocomplete(inputId, dropdownId) {
+            const input = document.getElementById(inputId);
+            const dropdown = document.getElementById(dropdownId);
+
+            input.addEventListener('input', async () => {
+                const q = input.value.trim().toLowerCase();
+                if (!q) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
+
+                const jobs = await ensureJobsLoaded();
+                const matches = jobs.filter(j =>
+                    String(j.job_number).includes(q) ||
+                    (j.client_name || '').toLowerCase().includes(q) ||
+                    (j.job_name || '').toLowerCase().includes(q)
+                ).slice(0, 8);
+
+                if (matches.length === 0) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
+
+                dropdown.innerHTML = matches.map(j => `
+                    <div class="bk-suggestion-item" data-job="${j.job_number}">
+                        <div>${esc(j.job_number)} — ${esc(j.client_name || '')}</div>
+                        <div class="bk-suggestion-meta">${esc(j.job_name || '')}</div>
+                    </div>
+                `).join('');
+                dropdown.classList.remove('bk-hidden');
+
+                dropdown.querySelectorAll('.bk-suggestion-item').forEach(item => {
+                    item.addEventListener('click', () => {
+                        input.value = item.dataset.job;
+                        dropdown.classList.add('bk-hidden');
+                        dropdown.innerHTML = '';
+                    });
+                });
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.add('bk-hidden');
+                }
+            });
+        }
 
         function statusPill(status) {
             const pillClass = status === 'active' ? 'aj-pill-success' : 'aj-pill-muted';

@@ -133,3 +133,33 @@
     color: var(--text-dim);
     border: 0.5px solid var(--border);
 }
+
+.bk-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--card-bg);
+    border: 0.5px solid var(--border2);
+    border-radius: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    z-index: 20;
+    margin-top: 4px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
+
+.bk-suggestion-item {
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.bk-suggestion-item:hover {
+    background: var(--card-hover-bg);
+}
+
+.bk-suggestion-meta {
+    color: var(--text-dim);
+    font-size: 12px;
+}
