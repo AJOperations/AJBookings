@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bookings</title>
+    <link rel="icon" type="image/png" href="https://aj-hq.up.railway.app/static/AJ_FavIcon.png">
+    <link rel="stylesheet" href="https://aj-hq.up.railway.app/static/aj-theme.css?v=1">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+    <link rel="stylesheet" href="/static/main.css?v=1">
+    <script src="https://aj-hq.up.railway.app/static/aj-utils.js"></script>
+</head>
+<body>
+    <header class="aj-header" id="aj-header">
+        <div class="aj-header-left">
+            <div class="aj-hq-trigger" onclick="ajToggleAppMenu()" aria-label="Open app menu">
+                <img class="aj-bug" src="" alt="August Jackson">
+                <span class="aj-hq-label">HQ</span>
+                <i class="ti ti-chevron-down aj-hq-chevron" aria-hidden="true"></i>
+            </div>
+            <span class="aj-tool-name">Bookings</span>
+        </div>
+        <div class="aj-header-right">
+            <div id="aj-user-zone"></div>
+            <div class="aj-header-divider"></div>
+            <button class="aj-theme-toggle" aria-label="Toggle theme">
+                <i class="ti ti-moon aj-icon-moon" aria-hidden="true"></i>
+                <i class="ti ti-sun aj-icon-sun" aria-hidden="true"></i>
+            </button>
+        </div>
+    </header>
+    <div class="aj-app-menu" id="aj-app-menu" hidden></div>
+    <div id="toast-container"></div>
+
+    <main class="container bk-page">
+        <div class="bk-page-header">
+            <h1>Events</h1>
+            <button class="bk-btn" id="new-event-btn"><i class="ti ti-plus"></i> New Event</button>
+        </div>
+
+        <div id="warning-banner" class="bk-warning-banner bk-hidden"></div>
+
+        <div class="bk-card bk-hidden" id="new-event-card">
+            <h2>New Event</h2>
+            <div class="bk-form-grid">
+                <div class="bk-form-row">
+                    <label for="f-name">Name</label>
+                    <input type="text" id="f-name" placeholder="e.g. AbbVie Tasting Series">
+                </div>
+                <div class="bk-form-row">
+                    <label for="f-job">Job Number</label>
+                    <input type="text" id="f-job" placeholder="7-digit job number" maxlength="7">
+                </div>
+                <div class="bk-form-row">
+                    <label for="f-location">Location</label>
+                    <input type="text" id="f-location" placeholder="optional">
+                </div>
+                <div class="bk-form-row">
+                    <label for="f-max-bookings">Max Bookings / Email</label>
+                    <input type="number" id="f-max-bookings" min="1" placeholder="optional">
+                </div>
+            </div>
+            <div class="bk-form-row">
+                <label for="f-notes">Notes</label>
+                <textarea id="f-notes" rows="2"></textarea>
+            </div>
+            <div class="bk-form-row-inline">
+                <input type="checkbox" id="f-waitlist"> <label for="f-waitlist" style="margin:0">Allow waitlist</label>
+                <span style="width:16px"></span>
+                <input type="checkbox" id="f-reschedule"> <label for="f-reschedule" style="margin:0">Allow reschedule</label>
+            </div>
+            <div style="display:flex; gap:10px; margin-top:8px;">
+                <button class="bk-btn" id="create-event-btn">Create Event</button>
+                <button class="bk-btn bk-btn-secondary" id="cancel-new-event-btn">Cancel</button>
+            </div>
+        </div>
+
+        <div class="bk-card">
+            <table class="bk-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Job #</th>
+                        <th>Status</th>
+                        <th>Slots</th>
+                        <th>Bookings</th>
+                        <th>Owner</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="events-tbody"></tbody>
+            </table>
+            <div class="bk-empty-state bk-hidden" id="events-empty">No events yet — create your first one above.</div>
+        </div>
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            ajInitHeader({ toolName: 'Bookings' });
+            loadEvents();
+
+            document.getElementById('new-event-btn').addEventListener('click', () => {
+                document.getElementById('new-event-card').classList.remove('bk-hidden');
+            });
+            document.getElementById('cancel-new-event-btn').addEventListener('click', () => {
+                document.getElementById('new-event-card').classList.add('bk-hidden');
+            });
+            document.getElementById('create-event-btn').addEventListener('click', createEvent);
+        });
+
+        function statusPill(status) {
+            return `<span class="bk-status-pill bk-status-${status}">${status}</span>`;
+        }
+
+        async function loadEvents() {
+            const res = await fetch('/api/events');
+            const data = await res.json();
+            const tbody = document.getElementById('events-tbody');
+            const empty = document.getElementById('events-empty');
+            tbody.innerHTML = '';
+
+            if (!data.events || data.events.length === 0) {
+                empty.classList.remove('bk-hidden');
+                return;
+            }
+            empty.classList.add('bk-hidden');
+
+            data.events.forEach(ev => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><a href="/admin/events/${ev.id}" style="color:inherit; text-decoration:none; font-weight:600;">${esc(ev.name)}</a></td>
+                    <td>${esc(ev.job_number)}</td>
+                    <td>${statusPill(ev.status)}</td>
+                    <td>${ev.slot_count}</td>
+                    <td>${ev.booking_count}</td>
+                    <td>${esc(ev.owner_name || '—')}</td>
+                    <td style="text-align:right;">
+                        <button class="bk-btn bk-btn-danger" data-id="${ev.id}" data-name="${esc(ev.name)}" onclick="deleteEvent(${ev.id}, this)">Delete</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function esc(s) {
+            const d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        async function createEvent() {
+            const name = document.getElementById('f-name').value.trim();
+            const job_number = document.getElementById('f-job').value.trim();
+            const location = document.getElementById('f-location').value.trim();
+            const notes = document.getElementById('f-notes').value.trim();
+            const allow_waitlist = document.getElementById('f-waitlist').checked;
+            const allow_reschedule = document.getElementById('f-reschedule').checked;
+            const max_bookings_per_email = document.getElementById('f-max-bookings').value || null;
+
+            if (!name) { showToast('Name is required', 'error'); return; }
+            if (!/^\d{7}$/.test(job_number)) { showToast('Job number must be exactly 7 digits', 'error'); return; }
+
+            const res = await fetch('/api/events', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, job_number, location, notes, allow_waitlist, allow_reschedule, max_bookings_per_email })
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                showToast(data.error || 'Could not create event', 'error');
+                return;
+            }
+
+            const banner = document.getElementById('warning-banner');
+            if (data.warning) {
+                banner.textContent = data.warning;
+                banner.classList.remove('bk-hidden');
+            } else {
+                banner.classList.add('bk-hidden');
+            }
+
+            document.getElementById('new-event-card').classList.add('bk-hidden');
+            ['f-name','f-job','f-location','f-notes','f-max-bookings'].forEach(id => document.getElementById(id).value = '');
+            document.getElementById('f-waitlist').checked = false;
+            document.getElementById('f-reschedule').checked = false;
+
+            showToast('Event created', 'success');
+            loadEvents();
+        }
+
+        async function deleteEvent(id, btn) {
+            if (!confirm('Delete this event? This cannot be undone.')) return;
+            const res = await fetch(`/api/events/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) {
+                showToast(data.error || 'Could not delete event', 'error');
+                return;
+            }
+            loadEvents();
+        }
+    </script>
+</body>
+</html>

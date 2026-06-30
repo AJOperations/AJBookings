@@ -1,0 +1,1008 @@
+"""
+Bookings — AJ internal scheduling/booking tool.
+
+Admin-internal app (any logged-in AJ user, no role restriction). Public
+booking surface (/book/<event_slug>) is NOT yet built — this pass covers
+admin event setup, manual + cadence-generated slots, and custom form
+field definitions. See app-state-bookings.md for what's built vs. open.
+
+Architecture: same pattern as Invoice Tracker — standalone Railway app,
+aj_auth.py for admin auth, HQ proxy block for shared reference data.
+"""
+
+import os
+import re
+import json
+import logging
+import secrets
+import sqlite3
+from datetime import datetime, date, timedelta
+
+import requests as req
+from flask import Flask, request, jsonify, g, session, render_template, abort
+from flask_cors import CORS
+
+from aj_auth import require_auth, get_current_user, has_tag
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__, static_folder='static', static_url_path='/static', template_folder='templates')
+
+# ── CORS — restrict to known AJ origins ──────────────────────────────────────
+CORS(app, origins=[
+    r"https://.*\.up\.railway\.app",
+    r"https://.*\.netlify\.app",
+    r"http://localhost:.*",
+    r"http://127\.0\.0\.1:.*",
+], supports_credentials=True)
+
+# ── Hard-fail on missing secrets in production ───────────────────────────────
+_FLASK_ENV = os.environ.get('FLASK_ENV', 'production')
+_IS_PROD   = _FLASK_ENV == 'production'
+
+_secret = os.environ.get('FLASK_SECRET_KEY')
+if not _secret:
+    if _IS_PROD:
+        raise RuntimeError(
+            "FLASK_SECRET_KEY is not set — refusing to start in production. "
+            "Generate one (openssl rand -hex 32) and set it in Railway env vars."
+        )
+    _secret = 'dev-secret-change-in-prod'
+    logger.warning("FLASK_SECRET_KEY not set — using insecure dev key (FLASK_ENV != production)")
+app.secret_key = _secret
+
+PLATFORM_SECRET = os.environ.get('PLATFORM_SECRET', '')
+if not PLATFORM_SECRET and _IS_PROD:
+    raise RuntimeError(
+        "PLATFORM_SECRET is not set — refusing to start in production. "
+        "Same value as HQ and every other AJ app."
+    )
+
+DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
+
+# Current schema version — MUST equal the highest `if current < N` migration
+# block below.
+SCHEMA_VERSION = 1
+
+_HQ_BASE    = 'https://aj-hq.up.railway.app'
+_HQ_TIMEOUT = 5
+
+# Days-of-week convention: Python date.weekday() — Monday=0 ... Sunday=6.
+# Used consistently in slot_rules.days_of_week and the cadence generator.
+WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+VALID_FIELD_TYPES = ('text', 'select', 'checkbox')
+VALID_EVENT_STATUSES = ('draft', 'active', 'closed')
+VALID_BOOKING_STATUSES = ('confirmed', 'waitlisted', 'cancelled')
+
+# Cap how much a single cadence rule can generate in one call — guards
+# against a typo'd date range (e.g. wrong century) silently trying to
+# create tens of thousands of rows.
+MAX_CADENCE_DAYS = 366
+
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
+
+def get_db():
+    if 'db' not in g:
+        g.db = sqlite3.connect(DB_PATH)
+        g.db.row_factory = sqlite3.Row
+        g.db.execute('PRAGMA foreign_keys = ON')
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(exception=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+
+
+def get_cols(db, table):
+    return [r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]
+
+
+def init_db():
+    db = sqlite3.connect(DB_PATH)
+    db.execute('PRAGMA foreign_keys = ON')
+
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS schema_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            version INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            job_number TEXT NOT NULL,
+            owner_user_id INTEGER,
+            owner_name TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            location TEXT,
+            notes TEXT,
+            allow_waitlist INTEGER NOT NULL DEFAULT 0,
+            allow_reschedule INTEGER NOT NULL DEFAULT 0,
+            max_bookings_per_email INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS slot_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            days_of_week TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            slot_length_minutes INTEGER NOT NULL,
+            capacity INTEGER NOT NULL DEFAULT 1,
+            slots_generated INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            capacity INTEGER NOT NULL DEFAULT 1,
+            location_override TEXT,
+            notes_override TEXT,
+            source TEXT NOT NULL DEFAULT 'manual',
+            slot_rule_id INTEGER REFERENCES slot_rules(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS bookings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slot_id INTEGER NOT NULL REFERENCES slots(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            custom_field_answers TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'confirmed',
+            cancel_token TEXT UNIQUE,
+            reschedule_token TEXT UNIQUE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS form_fields (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+            label TEXT NOT NULL,
+            field_type TEXT NOT NULL,
+            options TEXT NOT NULL DEFAULT '[]',
+            required INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_slots_event ON slots(event_id);
+        CREATE INDEX IF NOT EXISTS idx_slot_rules_event ON slot_rules(event_id);
+        CREATE INDEX IF NOT EXISTS idx_bookings_slot ON bookings(slot_id);
+        CREATE INDEX IF NOT EXISTS idx_form_fields_event ON form_fields(event_id);
+    """)
+    db.commit()
+
+    # ── Versioned migrations (PRAGMA table_info pattern — never NOT NULL
+    #    on ALTER TABLE ADD COLUMN, per reference-app-standards) ──────────────
+    row = db.execute("SELECT version FROM schema_meta WHERE id = 1").fetchone()
+    current = row[0] if row else 0
+
+    # if current < 2:
+    #     cols = get_cols(db, 'events')
+    #     if 'some_new_col' not in cols:
+    #         db.execute("ALTER TABLE events ADD COLUMN some_new_col TEXT")
+    #     current = 2
+
+    db.execute(
+        "INSERT INTO schema_meta (id, version) VALUES (1, ?) "
+        "ON CONFLICT(id) DO UPDATE SET version = ?",
+        (SCHEMA_VERSION, SCHEMA_VERSION)
+    )
+    db.commit()
+    db.close()
+
+
+init_db()
+
+
+# ── Small helpers ─────────────────────────────────────────────────────────────
+
+def _now():
+    return datetime.utcnow().isoformat()
+
+
+def _slugify(text):
+    s = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+    return s or 'event'
+
+
+def _unique_slug(db, base_slug):
+    slug = base_slug
+    n = 2
+    while db.execute("SELECT 1 FROM events WHERE slug = ?", (slug,)).fetchone():
+        slug = f"{base_slug}-{n}"
+        n += 1
+    return slug
+
+
+def _row_to_dict(row):
+    return dict(row) if row else None
+
+
+def is_valid_job_number(val):
+    """7-digit job number — same validation rule enforced everywhere in
+    the AJ ecosystem (mirrors isValidJobNumber() from aj-utils.js)."""
+    return bool(re.fullmatch(r'\d{7}', str(val or '')))
+
+
+def _hq_get(path):
+    try:
+        r = req.get(
+            f'{_HQ_BASE}{path}',
+            headers={'X-AJ-Key': PLATFORM_SECRET},
+            timeout=_HQ_TIMEOUT
+        )
+        return r.json(), r.status_code
+    except Exception as e:
+        return {'error': str(e)}, 502
+
+
+def validate_job_number_against_hq(job_number):
+    """
+    Returns (ok: bool, warning: str|None).
+
+    Format must always be a hard 7-digit match. The HQ registry lookup is
+    a soft check on top of that: if HQ is unreachable, we don't want a
+    transient network blip to block event creation, so we let it through
+    with a warning rather than a hard 400. If HQ responds and the job
+    genuinely isn't in the registry, that *is* a hard reject — Christine,
+    flagging this asymmetry in case you'd rather it always hard-fail.
+    """
+    if not is_valid_job_number(job_number):
+        return False, None
+
+    data, status = _hq_get(f'/api/jobs/{job_number}')
+    if status == 200 and data.get('job'):
+        return True, None
+    if status == 200 and not data.get('job'):
+        return False, None
+    # HQ unreachable / non-200 for reasons other than "not found"
+    return True, 'Could not verify job number against HQ registry (HQ unreachable) — allowed through.'
+
+
+# ── HQ Proxy Block (verbatim per reference-app-standards) ────────────────────
+
+@app.route('/api/apps')
+def proxy_apps():
+    data, status = _hq_get('/api/apps')
+    return jsonify(data), status
+
+
+@app.route('/auth/validate')
+def proxy_auth_validate():
+    cached = session.get('_aj_user')
+    if cached:
+        return jsonify({'valid': True, 'user': cached}), 200
+    token = request.args.get('token', '')
+    try:
+        r = req.get(
+            f'{_HQ_BASE}/auth/validate',
+            headers={'X-AJ-Key': PLATFORM_SECRET},
+            params={'token': token} if token else {},
+            timeout=_HQ_TIMEOUT
+        )
+        return jsonify(r.json()), r.status_code
+    except Exception as e:
+        return jsonify({'valid': False, 'error': str(e)}), 502
+
+
+@app.route('/api/users')
+def proxy_users():
+    data, status = _hq_get('/api/users')
+    return jsonify(data), status
+
+
+@app.route('/api/rates')
+def proxy_rates():
+    client = request.args.get('client', '')
+    path = f'/api/rates?client={client}' if client else '/api/rates'
+    data, status = _hq_get(path)
+    return jsonify(data), status
+
+
+@app.route('/api/rates/lookup')
+def proxy_rates_lookup():
+    qs = request.query_string.decode()
+    data, status = _hq_get(f'/api/rates/lookup?{qs}')
+    return jsonify(data), status
+
+
+@app.route('/api/people')
+def proxy_people():
+    item_type = request.args.get('item_type', '')
+    path = f'/api/people?item_type={item_type}' if item_type else '/api/people'
+    data, status = _hq_get(path)
+    return jsonify(data), status
+
+
+@app.route('/api/codes')
+def proxy_codes():
+    data, status = _hq_get('/api/codes')
+    return jsonify(data), status
+
+
+@app.route('/api/codes/fees')
+def proxy_codes_fees():
+    data, status = _hq_get('/api/codes/fees')
+    return jsonify(data), status
+
+
+@app.route('/api/codes/expenses')
+def proxy_codes_expenses():
+    data, status = _hq_get('/api/codes/expenses')
+    return jsonify(data), status
+
+
+@app.route('/api/jobs')
+def proxy_jobs():
+    qs = request.query_string.decode()
+    path = f'/api/jobs?{qs}' if qs else '/api/jobs'
+    data, status = _hq_get(path)
+    return jsonify(data), status
+
+
+@app.route('/api/jobs/<job_number>')
+def proxy_jobs_single(job_number):
+    data, status = _hq_get(f'/api/jobs/{job_number}')
+    return jsonify(data), status
+
+
+@app.route('/api/users/me/password', methods=['POST'])
+def proxy_user_change_password():
+    try:
+        r = req.post(
+            f'{_HQ_BASE}/api/users/me/password',
+            headers={
+                'X-AJ-Key': PLATFORM_SECRET,
+                'Content-Type': 'application/json',
+                'Cookie': f'aj_session={request.cookies.get("aj_session", "")}',
+            },
+            json=request.get_json(force=True, silent=True) or {},
+            timeout=_HQ_TIMEOUT
+        )
+        return jsonify(r.json()), r.status_code
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+
+# ── Email — STUBBED ───────────────────────────────────────────────────────────
+# Not wired to any route yet (booking flow is a later build pass). This is
+# the single seam to swap once HQ's /api/mailgun/send proxy route exists.
+#
+# TODO: swap this function body for a real call to HQ's Mailgun proxy:
+#   r = req.post(f'{_HQ_BASE}/api/mailgun/send',
+#                headers={'X-AJ-Key': PLATFORM_SECRET},
+#                json={'to': to, 'subject': subject, 'html': html,
+#                      'attachments': attachments or []})
+#   return r.status_code == 200
+
+def send_email(to, subject, html, attachments=None):
+    """STUB — logs instead of sending. Swap body for HQ Mailgun proxy call."""
+    logger.info(
+        "[EMAIL STUB] to=%s subject=%r attachments=%d (not sent — Mailgun proxy not built yet)",
+        to, subject, len(attachments or [])
+    )
+    return True
+
+
+# ── Auth helper ───────────────────────────────────────────────────────────────
+
+def _current_user_brief():
+    user = get_current_user()
+    if not user:
+        return None, None
+    return user.get('id'), user.get('name')
+
+
+# ── Admin pages ───────────────────────────────────────────────────────────────
+
+@app.route('/')
+@require_auth
+def index():
+    return render_template('admin_events.html')
+
+
+@app.route('/admin/events/<int:event_id>')
+@require_auth
+def admin_event_detail_page(event_id):
+    return render_template('admin_event_detail.html', event_id=event_id)
+
+
+# ── /api/summary (required by convention) ────────────────────────────────────
+
+@app.route('/api/summary')
+def api_summary():
+    db = get_db()
+    total = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    active = db.execute("SELECT COUNT(*) FROM events WHERE status = 'active'").fetchone()[0]
+    return jsonify({
+        'app': 'Bookings',
+        'status': 'ok',
+        'counts': {'events': total, 'active_events': active}
+    })
+
+
+# ── Events CRUD ───────────────────────────────────────────────────────────────
+
+@app.route('/api/events', methods=['GET'])
+@require_auth
+def list_events():
+    db = get_db()
+    rows = db.execute("""
+        SELECT e.*,
+            (SELECT COUNT(*) FROM slots s WHERE s.event_id = e.id) AS slot_count,
+            (SELECT COUNT(*) FROM bookings b
+                JOIN slots s2 ON s2.id = b.slot_id
+                WHERE s2.event_id = e.id AND b.status != 'cancelled') AS booking_count
+        FROM events e
+        ORDER BY e.created_at DESC
+    """).fetchall()
+    return jsonify({'events': [_row_to_dict(r) for r in rows]})
+
+
+@app.route('/api/events', methods=['POST'])
+@require_auth
+def create_event():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get('name') or '').strip()
+    job_number = (body.get('job_number') or '').strip()
+
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+    if not is_valid_job_number(job_number):
+        return jsonify({'error': 'job_number must be exactly 7 digits'}), 400
+
+    ok, warning = validate_job_number_against_hq(job_number)
+    if not ok:
+        return jsonify({'error': f'Job number {job_number} was not found in the HQ job registry'}), 400
+
+    db = get_db()
+    slug = _unique_slug(db, _slugify(name))
+    user_id, user_name = _current_user_brief()
+    now = _now()
+
+    cur = db.execute("""
+        INSERT INTO events
+            (slug, name, job_number, owner_user_id, owner_name, status,
+             location, notes, allow_waitlist, allow_reschedule,
+             max_bookings_per_email, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        slug, name, job_number, user_id, user_name,
+        body.get('location'), body.get('notes'),
+        1 if body.get('allow_waitlist') else 0,
+        1 if body.get('allow_reschedule') else 0,
+        body.get('max_bookings_per_email'),
+        now, now
+    ))
+    db.commit()
+
+    event = _row_to_dict(db.execute("SELECT * FROM events WHERE id = ?", (cur.lastrowid,)).fetchone())
+    resp = {'event': event}
+    if warning:
+        resp['warning'] = warning
+    return jsonify(resp), 201
+
+
+@app.route('/api/events/<int:event_id>', methods=['GET'])
+@require_auth
+def get_event(event_id):
+    db = get_db()
+    event = _row_to_dict(db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone())
+    if not event:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'event': event})
+
+
+@app.route('/api/events/<int:event_id>', methods=['PATCH'])
+@require_auth
+def update_event(event_id):
+    db = get_db()
+    existing = db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not existing:
+        return jsonify({'error': 'not found'}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {}
+
+    if 'name' in body:
+        if not (body['name'] or '').strip():
+            return jsonify({'error': 'name cannot be empty'}), 400
+        fields['name'] = body['name'].strip()
+
+    if 'job_number' in body:
+        jn = (body['job_number'] or '').strip()
+        if not is_valid_job_number(jn):
+            return jsonify({'error': 'job_number must be exactly 7 digits'}), 400
+        fields['job_number'] = jn
+
+    if 'status' in body:
+        if body['status'] not in VALID_EVENT_STATUSES:
+            return jsonify({'error': f'status must be one of {VALID_EVENT_STATUSES}'}), 400
+        fields['status'] = body['status']
+
+    for key in ('location', 'notes'):
+        if key in body:
+            fields[key] = body[key]
+
+    for key in ('allow_waitlist', 'allow_reschedule'):
+        if key in body:
+            fields[key] = 1 if body[key] else 0
+
+    if 'max_bookings_per_email' in body:
+        fields['max_bookings_per_email'] = body['max_bookings_per_email']
+
+    if not fields:
+        return jsonify({'error': 'no valid fields to update'}), 400
+
+    fields['updated_at'] = _now()
+    set_clause = ', '.join(f"{k} = ?" for k in fields)
+    db.execute(f"UPDATE events SET {set_clause} WHERE id = ?", (*fields.values(), event_id))
+    db.commit()
+
+    event = _row_to_dict(db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone())
+    return jsonify({'event': event})
+
+
+@app.route('/api/events/<int:event_id>', methods=['DELETE'])
+@require_auth
+def delete_event(event_id):
+    db = get_db()
+    existing = db.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not existing:
+        return jsonify({'error': 'not found'}), 404
+
+    booking_count = db.execute("""
+        SELECT COUNT(*) FROM bookings b
+        JOIN slots s ON s.id = b.slot_id
+        WHERE s.event_id = ? AND b.status != 'cancelled'
+    """, (event_id,)).fetchone()[0]
+
+    if booking_count > 0:
+        return jsonify({'error': f'event has {booking_count} active booking(s) — cannot delete'}), 409
+
+    db.execute("DELETE FROM events WHERE id = ?", (event_id,))  # cascades via FK
+    db.commit()
+    return jsonify({'deleted': True})
+
+
+# ── Slot Rules (cadence generator) ───────────────────────────────────────────
+
+def _generate_slots_for_rule(db, event_id, rule_id, start_date, end_date,
+                              days_of_week, start_time, end_time,
+                              slot_length_minutes, capacity):
+    """
+    Walks the date range day by day; for each matching weekday, lays slots
+    back-to-back from start_time to end_time. Inserts directly into `slots`
+    tagged source='generated' + slot_rule_id. Returns count created.
+
+    Does not check for overlap against existing slots from other rules or
+    manual entries — v1 is additive only. If two rules overlap, both sets
+    of slots exist independently. Fine for now; flag if this bites someone.
+    """
+    now = _now()
+    created = 0
+    rows = []
+
+    cur_date = start_date
+    while cur_date <= end_date:
+        if cur_date.weekday() in days_of_week:
+            slot_start = datetime.combine(cur_date, start_time)
+            day_end = datetime.combine(cur_date, end_time)
+            length = timedelta(minutes=slot_length_minutes)
+
+            while slot_start + length <= day_end:
+                slot_end = slot_start + length
+                rows.append((
+                    event_id, slot_start.isoformat(), slot_end.isoformat(),
+                    capacity, 'generated', rule_id, now
+                ))
+                created += 1
+                slot_start = slot_end
+        cur_date += timedelta(days=1)
+
+    if rows:
+        db.executemany("""
+            INSERT INTO slots (event_id, start_time, end_time, capacity, source, slot_rule_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+
+    return created
+
+
+@app.route('/api/events/<int:event_id>/slot-rules', methods=['GET'])
+@require_auth
+def list_slot_rules(event_id):
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM slot_rules WHERE event_id = ? ORDER BY created_at DESC", (event_id,)
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = _row_to_dict(r)
+        d['days_of_week'] = json.loads(d['days_of_week'])
+        out.append(d)
+    return jsonify({'slot_rules': out})
+
+
+@app.route('/api/events/<int:event_id>/slot-rules', methods=['POST'])
+@require_auth
+def create_slot_rule(event_id):
+    db = get_db()
+    if not db.execute("SELECT 1 FROM events WHERE id = ?", (event_id,)).fetchone():
+        return jsonify({'error': 'event not found'}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+
+    try:
+        start_date = date.fromisoformat(body.get('start_date', ''))
+        end_date = date.fromisoformat(body.get('end_date', ''))
+    except ValueError:
+        return jsonify({'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+
+    if end_date < start_date:
+        return jsonify({'error': 'end_date must be on or after start_date'}), 400
+
+    if (end_date - start_date).days > MAX_CADENCE_DAYS:
+        return jsonify({'error': f'date range cannot exceed {MAX_CADENCE_DAYS} days'}), 400
+
+    days_of_week = body.get('days_of_week')
+    if not isinstance(days_of_week, list) or not days_of_week:
+        return jsonify({'error': 'days_of_week must be a non-empty list (0=Mon ... 6=Sun)'}), 400
+    if not all(isinstance(d, int) and 0 <= d <= 6 for d in days_of_week):
+        return jsonify({'error': 'days_of_week values must be integers 0-6 (0=Mon ... 6=Sun)'}), 400
+
+    try:
+        start_time = datetime.strptime(body.get('start_time', ''), '%H:%M').time()
+        end_time = datetime.strptime(body.get('end_time', ''), '%H:%M').time()
+    except ValueError:
+        return jsonify({'error': 'start_time and end_time must be HH:MM (24-hour)'}), 400
+
+    if end_time <= start_time:
+        return jsonify({'error': 'end_time must be after start_time'}), 400
+
+    try:
+        slot_length_minutes = int(body.get('slot_length_minutes'))
+        capacity = int(body.get('capacity', 1))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'slot_length_minutes and capacity must be integers'}), 400
+
+    if slot_length_minutes <= 0:
+        return jsonify({'error': 'slot_length_minutes must be greater than 0'}), 400
+    if capacity < 1:
+        return jsonify({'error': 'capacity must be at least 1'}), 400
+
+    now = _now()
+    cur = db.execute("""
+        INSERT INTO slot_rules
+            (event_id, start_date, end_date, days_of_week, start_time, end_time,
+             slot_length_minutes, capacity, slots_generated, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    """, (
+        event_id, start_date.isoformat(), end_date.isoformat(), json.dumps(days_of_week),
+        start_time.strftime('%H:%M'), end_time.strftime('%H:%M'),
+        slot_length_minutes, capacity, now
+    ))
+    rule_id = cur.lastrowid
+
+    created = _generate_slots_for_rule(
+        db, event_id, rule_id, start_date, end_date,
+        set(days_of_week), start_time, end_time, slot_length_minutes, capacity
+    )
+
+    db.execute("UPDATE slot_rules SET slots_generated = ? WHERE id = ?", (created, rule_id))
+    db.commit()
+
+    rule = _row_to_dict(db.execute("SELECT * FROM slot_rules WHERE id = ?", (rule_id,)).fetchone())
+    rule['days_of_week'] = json.loads(rule['days_of_week'])
+    return jsonify({'slot_rule': rule, 'slots_created': created}), 201
+
+
+@app.route('/api/slot-rules/<int:rule_id>', methods=['DELETE'])
+@require_auth
+def delete_slot_rule(rule_id):
+    """
+    Deletes the rule only. Already-generated slots are left in place
+    (they're independent rows by this point — same logic as the Rooms
+    rename/redirect asymmetry in HQ: deleting the generator is not the
+    same as deleting what it generated). Pass ?cascade=true to also
+    remove slots from this rule that have no active bookings.
+    """
+    db = get_db()
+    rule = db.execute("SELECT * FROM slot_rules WHERE id = ?", (rule_id,)).fetchone()
+    if not rule:
+        return jsonify({'error': 'not found'}), 404
+
+    cascade = request.args.get('cascade', '').lower() == 'true'
+    removed_slots = 0
+
+    if cascade:
+        blocked = db.execute("""
+            SELECT COUNT(*) FROM bookings b
+            JOIN slots s ON s.id = b.slot_id
+            WHERE s.slot_rule_id = ? AND b.status != 'cancelled'
+        """, (rule_id,)).fetchone()[0]
+        if blocked > 0:
+            return jsonify({
+                'error': f'{blocked} slot(s) from this rule have active bookings — cannot cascade delete'
+            }), 409
+        cur = db.execute("DELETE FROM slots WHERE slot_rule_id = ?", (rule_id,))
+        removed_slots = cur.rowcount
+
+    db.execute("DELETE FROM slot_rules WHERE id = ?", (rule_id,))
+    db.commit()
+    return jsonify({'deleted': True, 'slots_removed': removed_slots})
+
+
+# ── Slots (manual + generated, unified) ──────────────────────────────────────
+
+@app.route('/api/events/<int:event_id>/slots', methods=['GET'])
+@require_auth
+def list_slots(event_id):
+    db = get_db()
+    rows = db.execute("""
+        SELECT s.*,
+            (SELECT COUNT(*) FROM bookings b WHERE b.slot_id = s.id AND b.status = 'confirmed') AS confirmed_count,
+            (SELECT COUNT(*) FROM bookings b WHERE b.slot_id = s.id AND b.status = 'waitlisted') AS waitlisted_count
+        FROM slots s
+        WHERE s.event_id = ?
+        ORDER BY s.start_time ASC
+    """, (event_id,)).fetchall()
+    return jsonify({'slots': [_row_to_dict(r) for r in rows]})
+
+
+@app.route('/api/events/<int:event_id>/slots', methods=['POST'])
+@require_auth
+def create_manual_slot(event_id):
+    db = get_db()
+    if not db.execute("SELECT 1 FROM events WHERE id = ?", (event_id,)).fetchone():
+        return jsonify({'error': 'event not found'}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        start_time = datetime.fromisoformat(body.get('start_time', ''))
+        end_time = datetime.fromisoformat(body.get('end_time', ''))
+    except ValueError:
+        return jsonify({'error': 'start_time and end_time must be ISO datetimes'}), 400
+
+    if end_time <= start_time:
+        return jsonify({'error': 'end_time must be after start_time'}), 400
+
+    try:
+        capacity = int(body.get('capacity', 1))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'capacity must be an integer'}), 400
+    if capacity < 1:
+        return jsonify({'error': 'capacity must be at least 1'}), 400
+
+    now = _now()
+    cur = db.execute("""
+        INSERT INTO slots (event_id, start_time, end_time, capacity, location_override,
+                            notes_override, source, slot_rule_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'manual', NULL, ?)
+    """, (
+        event_id, start_time.isoformat(), end_time.isoformat(), capacity,
+        body.get('location_override'), body.get('notes_override'), now
+    ))
+    db.commit()
+    slot = _row_to_dict(db.execute("SELECT * FROM slots WHERE id = ?", (cur.lastrowid,)).fetchone())
+    return jsonify({'slot': slot}), 201
+
+
+@app.route('/api/slots/<int:slot_id>', methods=['PATCH'])
+@require_auth
+def update_slot(slot_id):
+    db = get_db()
+    existing = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    if not existing:
+        return jsonify({'error': 'not found'}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {}
+
+    if 'start_time' in body or 'end_time' in body:
+        try:
+            start_time = datetime.fromisoformat(body.get('start_time', existing['start_time']))
+            end_time = datetime.fromisoformat(body.get('end_time', existing['end_time']))
+        except ValueError:
+            return jsonify({'error': 'start_time and end_time must be ISO datetimes'}), 400
+        if end_time <= start_time:
+            return jsonify({'error': 'end_time must be after start_time'}), 400
+        fields['start_time'] = start_time.isoformat()
+        fields['end_time'] = end_time.isoformat()
+
+    if 'capacity' in body:
+        try:
+            capacity = int(body['capacity'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'capacity must be an integer'}), 400
+        if capacity < 1:
+            return jsonify({'error': 'capacity must be at least 1'}), 400
+        booked = db.execute(
+            "SELECT COUNT(*) FROM bookings WHERE slot_id = ? AND status = 'confirmed'", (slot_id,)
+        ).fetchone()[0]
+        if capacity < booked:
+            return jsonify({'error': f'cannot set capacity below {booked} existing confirmed booking(s)'}), 409
+        fields['capacity'] = capacity
+
+    for key in ('location_override', 'notes_override'):
+        if key in body:
+            fields[key] = body[key]
+
+    if not fields:
+        return jsonify({'error': 'no valid fields to update'}), 400
+
+    set_clause = ', '.join(f"{k} = ?" for k in fields)
+    db.execute(f"UPDATE slots SET {set_clause} WHERE id = ?", (*fields.values(), slot_id))
+    db.commit()
+    slot = _row_to_dict(db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone())
+    return jsonify({'slot': slot})
+
+
+@app.route('/api/slots/<int:slot_id>', methods=['DELETE'])
+@require_auth
+def delete_slot(slot_id):
+    db = get_db()
+    existing = db.execute("SELECT id FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    if not existing:
+        return jsonify({'error': 'not found'}), 404
+
+    active = db.execute(
+        "SELECT COUNT(*) FROM bookings WHERE slot_id = ? AND status != 'cancelled'", (slot_id,)
+    ).fetchone()[0]
+    if active > 0:
+        return jsonify({'error': f'slot has {active} active booking(s) — cannot delete'}), 409
+
+    db.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
+    db.commit()
+    return jsonify({'deleted': True})
+
+
+# ── Form Fields ───────────────────────────────────────────────────────────────
+
+@app.route('/api/events/<int:event_id>/form-fields', methods=['GET'])
+@require_auth
+def list_form_fields(event_id):
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM form_fields WHERE event_id = ? ORDER BY sort_order ASC, id ASC", (event_id,)
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = _row_to_dict(r)
+        d['options'] = json.loads(d['options'])
+        out.append(d)
+    return jsonify({'form_fields': out})
+
+
+@app.route('/api/events/<int:event_id>/form-fields', methods=['POST'])
+@require_auth
+def create_form_field(event_id):
+    db = get_db()
+    if not db.execute("SELECT 1 FROM events WHERE id = ?", (event_id,)).fetchone():
+        return jsonify({'error': 'event not found'}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    label = (body.get('label') or '').strip()
+    field_type = body.get('field_type')
+
+    if not label:
+        return jsonify({'error': 'label is required'}), 400
+    if field_type not in VALID_FIELD_TYPES:
+        return jsonify({'error': f'field_type must be one of {VALID_FIELD_TYPES}'}), 400
+
+    options = body.get('options') or []
+    if field_type == 'select' and not (isinstance(options, list) and len(options) >= 1):
+        return jsonify({'error': 'select fields require at least one option'}), 400
+
+    max_sort = db.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) FROM form_fields WHERE event_id = ?", (event_id,)
+    ).fetchone()[0]
+
+    cur = db.execute("""
+        INSERT INTO form_fields (event_id, label, field_type, options, required, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        event_id, label, field_type, json.dumps(options if field_type == 'select' else []),
+        1 if body.get('required') else 0, max_sort + 1
+    ))
+    db.commit()
+
+    field = _row_to_dict(db.execute("SELECT * FROM form_fields WHERE id = ?", (cur.lastrowid,)).fetchone())
+    field['options'] = json.loads(field['options'])
+    return jsonify({'form_field': field}), 201
+
+
+@app.route('/api/form-fields/<int:field_id>', methods=['PATCH'])
+@require_auth
+def update_form_field(field_id):
+    db = get_db()
+    existing = db.execute("SELECT * FROM form_fields WHERE id = ?", (field_id,)).fetchone()
+    if not existing:
+        return jsonify({'error': 'not found'}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {}
+
+    if 'label' in body:
+        if not (body['label'] or '').strip():
+            return jsonify({'error': 'label cannot be empty'}), 400
+        fields['label'] = body['label'].strip()
+
+    if 'field_type' in body:
+        if body['field_type'] not in VALID_FIELD_TYPES:
+            return jsonify({'error': f'field_type must be one of {VALID_FIELD_TYPES}'}), 400
+        fields['field_type'] = body['field_type']
+
+    if 'options' in body:
+        fields['options'] = json.dumps(body['options'] or [])
+
+    if 'required' in body:
+        fields['required'] = 1 if body['required'] else 0
+
+    if 'sort_order' in body:
+        fields['sort_order'] = body['sort_order']
+
+    if not fields:
+        return jsonify({'error': 'no valid fields to update'}), 400
+
+    set_clause = ', '.join(f"{k} = ?" for k in fields)
+    db.execute(f"UPDATE form_fields SET {set_clause} WHERE id = ?", (*fields.values(), field_id))
+    db.commit()
+
+    field = _row_to_dict(db.execute("SELECT * FROM form_fields WHERE id = ?", (field_id,)).fetchone())
+    field['options'] = json.loads(field['options'])
+    return jsonify({'form_field': field})
+
+
+@app.route('/api/form-fields/<int:field_id>', methods=['DELETE'])
+@require_auth
+def delete_form_field(field_id):
+    db = get_db()
+    if not db.execute("SELECT 1 FROM form_fields WHERE id = ?", (field_id,)).fetchone():
+        return jsonify({'error': 'not found'}), 404
+    db.execute("DELETE FROM form_fields WHERE id = ?", (field_id,))
+    db.commit()
+    return jsonify({'deleted': True})
+
+
+# ── Bookings — read-only stub ─────────────────────────────────────────────────
+# Public booking flow isn't built yet (no rows can exist via the app itself
+# yet), but the endpoint is wired so the admin event detail page has
+# somewhere real to call once it does.
+
+@app.route('/api/events/<int:event_id>/bookings', methods=['GET'])
+@require_auth
+def list_bookings(event_id):
+    db = get_db()
+    rows = db.execute("""
+        SELECT b.*, s.start_time, s.end_time
+        FROM bookings b
+        JOIN slots s ON s.id = b.slot_id
+        WHERE s.event_id = ?
+        ORDER BY s.start_time ASC
+    """, (event_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = _row_to_dict(r)
+        d['custom_field_answers'] = json.loads(d['custom_field_answers'])
+        out.append(d)
+    return jsonify({'bookings': out})
+
+
+if __name__ == '__main__':
+    app.run(debug=not _IS_PROD, port=int(os.environ.get('PORT', 5000)))

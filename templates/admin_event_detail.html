@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bookings — Event</title>
+    <link rel="icon" type="image/png" href="https://aj-hq.up.railway.app/static/AJ_FavIcon.png">
+    <link rel="stylesheet" href="https://aj-hq.up.railway.app/static/aj-theme.css?v=1">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+    <link rel="stylesheet" href="/static/main.css?v=1">
+    <script src="https://aj-hq.up.railway.app/static/aj-utils.js"></script>
+</head>
+<body>
+    <header class="aj-header" id="aj-header">
+        <div class="aj-header-left">
+            <div class="aj-hq-trigger" onclick="ajToggleAppMenu()" aria-label="Open app menu">
+                <img class="aj-bug" src="" alt="August Jackson">
+                <span class="aj-hq-label">HQ</span>
+                <i class="ti ti-chevron-down aj-hq-chevron" aria-hidden="true"></i>
+            </div>
+            <span class="aj-tool-name">Bookings</span>
+        </div>
+        <div class="aj-header-right">
+            <div id="aj-user-zone"></div>
+            <div class="aj-header-divider"></div>
+            <button class="aj-theme-toggle" aria-label="Toggle theme">
+                <i class="ti ti-moon aj-icon-moon" aria-hidden="true"></i>
+                <i class="ti ti-sun aj-icon-sun" aria-hidden="true"></i>
+            </button>
+        </div>
+    </header>
+    <div class="aj-app-menu" id="aj-app-menu" hidden></div>
+    <div id="toast-container"></div>
+
+    <main class="container bk-page">
+        <a href="/" class="bk-back-link"><i class="ti ti-arrow-left"></i> All Events</a>
+        <div class="bk-page-header">
+            <h1 id="event-title">Loading…</h1>
+            <span id="event-status-pill"></span>
+        </div>
+
+        <!-- Event meta -->
+        <div class="bk-card">
+            <h2>Event Details</h2>
+            <div class="bk-form-grid">
+                <div class="bk-form-row">
+                    <label for="ev-name">Name</label>
+                    <input type="text" id="ev-name">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ev-job">Job Number</label>
+                    <input type="text" id="ev-job" maxlength="7">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ev-location">Location</label>
+                    <input type="text" id="ev-location">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ev-status">Status</label>
+                    <select id="ev-status">
+                        <option value="draft">Draft</option>
+                        <option value="active">Active</option>
+                        <option value="closed">Closed</option>
+                    </select>
+                </div>
+                <div class="bk-form-row">
+                    <label for="ev-max-bookings">Max Bookings / Email</label>
+                    <input type="number" id="ev-max-bookings" min="1">
+                </div>
+            </div>
+            <div class="bk-form-row">
+                <label for="ev-notes">Notes</label>
+                <textarea id="ev-notes" rows="2"></textarea>
+            </div>
+            <div class="bk-form-row-inline">
+                <input type="checkbox" id="ev-waitlist"> <label for="ev-waitlist" style="margin:0">Allow waitlist</label>
+                <span style="width:16px"></span>
+                <input type="checkbox" id="ev-reschedule"> <label for="ev-reschedule" style="margin:0">Allow reschedule</label>
+            </div>
+            <button class="bk-btn" id="save-event-btn" style="margin-top:8px;">Save Changes</button>
+        </div>
+
+        <!-- Cadence generator -->
+        <div class="bk-card">
+            <h2>Generate Slots — Cadence</h2>
+            <div class="bk-form-grid">
+                <div class="bk-form-row">
+                    <label for="sr-start-date">Start Date</label>
+                    <input type="date" id="sr-start-date">
+                </div>
+                <div class="bk-form-row">
+                    <label for="sr-end-date">End Date</label>
+                    <input type="date" id="sr-end-date">
+                </div>
+                <div class="bk-form-row">
+                    <label for="sr-start-time">Daily Start Time</label>
+                    <input type="time" id="sr-start-time">
+                </div>
+                <div class="bk-form-row">
+                    <label for="sr-end-time">Daily End Time</label>
+                    <input type="time" id="sr-end-time">
+                </div>
+                <div class="bk-form-row">
+                    <label for="sr-length">Slot Length (minutes)</label>
+                    <input type="number" id="sr-length" min="1" value="30">
+                </div>
+                <div class="bk-form-row">
+                    <label for="sr-capacity">Capacity per Slot</label>
+                    <input type="number" id="sr-capacity" min="1" value="1">
+                </div>
+            </div>
+            <div class="bk-form-row">
+                <label>Days of Week</label>
+                <div class="bk-days-of-week" id="dow-chips">
+                    <span class="bk-day-chip" data-val="0">Mon</span>
+                    <span class="bk-day-chip" data-val="1">Tue</span>
+                    <span class="bk-day-chip" data-val="2">Wed</span>
+                    <span class="bk-day-chip" data-val="3">Thu</span>
+                    <span class="bk-day-chip" data-val="4">Fri</span>
+                    <span class="bk-day-chip" data-val="5">Sat</span>
+                    <span class="bk-day-chip" data-val="6">Sun</span>
+                </div>
+            </div>
+            <button class="bk-btn" id="generate-slots-btn" style="margin-top:4px;">Generate Slots</button>
+
+            <div id="slot-rules-list" style="margin-top:20px;"></div>
+        </div>
+
+        <!-- Manual slots -->
+        <div class="bk-card">
+            <h2>Add a One-Off Slot</h2>
+            <div class="bk-form-grid">
+                <div class="bk-form-row">
+                    <label for="ms-start">Start</label>
+                    <input type="datetime-local" id="ms-start">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ms-end">End</label>
+                    <input type="datetime-local" id="ms-end">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ms-capacity">Capacity</label>
+                    <input type="number" id="ms-capacity" min="1" value="1">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ms-location">Location Override</label>
+                    <input type="text" id="ms-location" placeholder="optional">
+                </div>
+            </div>
+            <button class="bk-btn" id="add-slot-btn">Add Slot</button>
+        </div>
+
+        <!-- Slots table -->
+        <div class="bk-card">
+            <h2>Slots</h2>
+            <table class="bk-table">
+                <thead>
+                    <tr><th>Start</th><th>End</th><th>Capacity</th><th>Confirmed</th><th>Waitlisted</th><th>Source</th><th></th></tr>
+                </thead>
+                <tbody id="slots-tbody"></tbody>
+            </table>
+            <div class="bk-empty-state bk-hidden" id="slots-empty">No slots yet — generate a cadence or add one manually above.</div>
+        </div>
+
+        <!-- Form fields -->
+        <div class="bk-card">
+            <h2>Custom Form Fields</h2>
+            <p style="font-size:13px; color:var(--body-text-65,rgba(255,255,255,0.65)); margin-top:-8px;">Beyond name/email, shown to clients on the public booking page.</p>
+            <div class="bk-form-grid">
+                <div class="bk-form-row">
+                    <label for="ff-label">Label</label>
+                    <input type="text" id="ff-label" placeholder="e.g. Dietary restrictions">
+                </div>
+                <div class="bk-form-row">
+                    <label for="ff-type">Type</label>
+                    <select id="ff-type">
+                        <option value="text">Text</option>
+                        <option value="select">Select (dropdown)</option>
+                        <option value="checkbox">Checkbox</option>
+                    </select>
+                </div>
+                <div class="bk-form-row" id="ff-options-row">
+                    <label for="ff-options">Options (comma-separated)</label>
+                    <input type="text" id="ff-options" placeholder="e.g. Vegetarian, Vegan, None">
+                </div>
+            </div>
+            <div class="bk-form-row-inline">
+                <input type="checkbox" id="ff-required"> <label for="ff-required" style="margin:0">Required</label>
+            </div>
+            <button class="bk-btn" id="add-field-btn" style="margin-top:4px;">Add Field</button>
+
+            <table class="bk-table" style="margin-top:16px;">
+                <thead><tr><th>Label</th><th>Type</th><th>Required</th><th></th></tr></thead>
+                <tbody id="fields-tbody"></tbody>
+            </table>
+            <div class="bk-empty-state bk-hidden" id="fields-empty">No custom fields yet — name and email are always collected.</div>
+        </div>
+
+        <!-- Bookings -->
+        <div class="bk-card">
+            <h2>Bookings</h2>
+            <table class="bk-table">
+                <thead><tr><th>Name</th><th>Email</th><th>Slot</th><th>Status</th></tr></thead>
+                <tbody id="bookings-tbody"></tbody>
+            </table>
+            <div class="bk-empty-state bk-hidden" id="bookings-empty">No bookings yet — the public booking page isn't live yet.</div>
+        </div>
+    </main>
+
+    <script>
+        const EVENT_ID = {{ event_id }};
+        let selectedDays = new Set();
+
+        document.addEventListener('DOMContentLoaded', () => {
+            ajInitHeader({ toolName: 'Bookings' });
+            loadEvent();
+            loadSlotRules();
+            loadSlots();
+            loadFormFields();
+            loadBookings();
+
+            document.getElementById('save-event-btn').addEventListener('click', saveEvent);
+            document.getElementById('generate-slots-btn').addEventListener('click', generateSlots);
+            document.getElementById('add-slot-btn').addEventListener('click', addManualSlot);
+            document.getElementById('add-field-btn').addEventListener('click', addFormField);
+
+            document.querySelectorAll('.bk-day-chip').forEach(chip => {
+                chip.addEventListener('click', () => {
+                    const val = parseInt(chip.dataset.val);
+                    if (selectedDays.has(val)) { selectedDays.delete(val); chip.classList.remove('selected'); }
+                    else { selectedDays.add(val); chip.classList.add('selected'); }
+                });
+            });
+
+            document.getElementById('ff-type').addEventListener('change', (e) => {
+                document.getElementById('ff-options-row').classList.toggle('bk-hidden', e.target.value !== 'select');
+            });
+        });
+
+        function esc(s) {
+            const d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        function fmtDateTime(iso) {
+            const d = new Date(iso);
+            return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        }
+
+        // ── Event meta ──────────────────────────────────────────────────────
+        async function loadEvent() {
+            const res = await fetch(`/api/events/${EVENT_ID}`);
+            const data = await res.json();
+            if (!res.ok) { showToast('Event not found', 'error'); return; }
+            const ev = data.event;
+
+            document.getElementById('event-title').textContent = ev.name;
+            document.getElementById('event-status-pill').innerHTML = `<span class="bk-status-pill bk-status-${ev.status}">${ev.status}</span>`;
+            document.getElementById('ev-name').value = ev.name;
+            document.getElementById('ev-job').value = ev.job_number;
+            document.getElementById('ev-location').value = ev.location || '';
+            document.getElementById('ev-notes').value = ev.notes || '';
+            document.getElementById('ev-status').value = ev.status;
+            document.getElementById('ev-max-bookings').value = ev.max_bookings_per_email || '';
+            document.getElementById('ev-waitlist').checked = !!ev.allow_waitlist;
+            document.getElementById('ev-reschedule').checked = !!ev.allow_reschedule;
+        }
+
+        async function saveEvent() {
+            const body = {
+                name: document.getElementById('ev-name').value.trim(),
+                job_number: document.getElementById('ev-job').value.trim(),
+                location: document.getElementById('ev-location').value.trim(),
+                notes: document.getElementById('ev-notes').value.trim(),
+                status: document.getElementById('ev-status').value,
+                max_bookings_per_email: document.getElementById('ev-max-bookings').value || null,
+                allow_waitlist: document.getElementById('ev-waitlist').checked,
+                allow_reschedule: document.getElementById('ev-reschedule').checked,
+            };
+            const res = await fetch(`/api/events/${EVENT_ID}`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not save', 'error'); return; }
+            showToast('Saved', 'success');
+            loadEvent();
+        }
+
+        // ── Slot rules / cadence generator ─────────────────────────────────
+        async function loadSlotRules() {
+            const res = await fetch(`/api/events/${EVENT_ID}/slot-rules`);
+            const data = await res.json();
+            const container = document.getElementById('slot-rules-list');
+            if (!data.slot_rules || data.slot_rules.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+            container.innerHTML = '<h2 style="font-size:14px; margin-bottom:10px;">Existing Rules</h2>' +
+                data.slot_rules.map(r => {
+                    const days = r.days_of_week.map(d => ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d]).join(', ');
+                    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:13px;">
+                        <span>${r.start_date} → ${r.end_date} · ${days} · ${r.start_time}–${r.end_time} · ${r.slot_length_minutes}min · cap ${r.capacity} · <strong>${r.slots_generated} slots</strong></span>
+                        <button class="bk-btn bk-btn-danger" onclick="deleteSlotRule(${r.id})">Delete Rule</button>
+                    </div>`;
+                }).join('');
+        }
+
+        async function generateSlots() {
+            const start_date = document.getElementById('sr-start-date').value;
+            const end_date = document.getElementById('sr-end-date').value;
+            const start_time = document.getElementById('sr-start-time').value;
+            const end_time = document.getElementById('sr-end-time').value;
+            const slot_length_minutes = parseInt(document.getElementById('sr-length').value);
+            const capacity = parseInt(document.getElementById('sr-capacity').value);
+
+            if (!start_date || !end_date || !start_time || !end_time) {
+                showToast('Fill in dates and times', 'error'); return;
+            }
+            if (selectedDays.size === 0) {
+                showToast('Select at least one day of week', 'error'); return;
+            }
+
+            const res = await fetch(`/api/events/${EVENT_ID}/slot-rules`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    start_date, end_date, start_time, end_time, slot_length_minutes, capacity,
+                    days_of_week: Array.from(selectedDays)
+                })
+            });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not generate slots', 'error'); return; }
+            showToast(`Generated ${data.slots_created} slots`, 'success');
+            loadSlotRules();
+            loadSlots();
+        }
+
+        async function deleteSlotRule(ruleId) {
+            const cascade = confirm('Also delete the slots this rule generated (only those with no active bookings)? Cancel = keep slots, just remove the rule.');
+            const res = await fetch(`/api/slot-rules/${ruleId}?cascade=${cascade}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not delete rule', 'error'); return; }
+            showToast(`Rule deleted${data.slots_removed ? ' · ' + data.slots_removed + ' slots removed' : ''}`, 'success');
+            loadSlotRules();
+            loadSlots();
+        }
+
+        // ── Slots ───────────────────────────────────────────────────────────
+        async function loadSlots() {
+            const res = await fetch(`/api/events/${EVENT_ID}/slots`);
+            const data = await res.json();
+            const tbody = document.getElementById('slots-tbody');
+            const empty = document.getElementById('slots-empty');
+            tbody.innerHTML = '';
+
+            if (!data.slots || data.slots.length === 0) {
+                empty.classList.remove('bk-hidden');
+                return;
+            }
+            empty.classList.add('bk-hidden');
+
+            data.slots.forEach(s => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${fmtDateTime(s.start_time)}</td>
+                    <td>${fmtDateTime(s.end_time)}</td>
+                    <td>${s.capacity}</td>
+                    <td>${s.confirmed_count}</td>
+                    <td>${s.waitlisted_count}</td>
+                    <td><span class="bk-source-tag">${s.source}</span></td>
+                    <td style="text-align:right;"><button class="bk-btn bk-btn-danger" onclick="deleteSlot(${s.id})">Delete</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function addManualSlot() {
+            const start_time = document.getElementById('ms-start').value;
+            const end_time = document.getElementById('ms-end').value;
+            const capacity = parseInt(document.getElementById('ms-capacity').value);
+            const location_override = document.getElementById('ms-location').value.trim();
+
+            if (!start_time || !end_time) { showToast('Start and end are required', 'error'); return; }
+
+            const res = await fetch(`/api/events/${EVENT_ID}/slots`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ start_time, end_time, capacity, location_override })
+            });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not add slot', 'error'); return; }
+            showToast('Slot added', 'success');
+            document.getElementById('ms-start').value = '';
+            document.getElementById('ms-end').value = '';
+            document.getElementById('ms-location').value = '';
+            loadSlots();
+        }
+
+        async function deleteSlot(id) {
+            if (!confirm('Delete this slot?')) return;
+            const res = await fetch(`/api/slots/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not delete slot', 'error'); return; }
+            loadSlots();
+        }
+
+        // ── Form fields ─────────────────────────────────────────────────────
+        async function loadFormFields() {
+            const res = await fetch(`/api/events/${EVENT_ID}/form-fields`);
+            const data = await res.json();
+            const tbody = document.getElementById('fields-tbody');
+            const empty = document.getElementById('fields-empty');
+            tbody.innerHTML = '';
+
+            if (!data.form_fields || data.form_fields.length === 0) {
+                empty.classList.remove('bk-hidden');
+                return;
+            }
+            empty.classList.add('bk-hidden');
+
+            data.form_fields.forEach(f => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${esc(f.label)}</td>
+                    <td>${esc(f.field_type)}</td>
+                    <td>${f.required ? 'Yes' : 'No'}</td>
+                    <td style="text-align:right;"><button class="bk-btn bk-btn-danger" onclick="deleteFormField(${f.id})">Delete</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function addFormField() {
+            const label = document.getElementById('ff-label').value.trim();
+            const field_type = document.getElementById('ff-type').value;
+            const required = document.getElementById('ff-required').checked;
+            const optionsRaw = document.getElementById('ff-options').value.trim();
+            const options = field_type === 'select'
+                ? optionsRaw.split(',').map(s => s.trim()).filter(Boolean)
+                : [];
+
+            if (!label) { showToast('Label is required', 'error'); return; }
+            if (field_type === 'select' && options.length === 0) { showToast('Select fields need at least one option', 'error'); return; }
+
+            const res = await fetch(`/api/events/${EVENT_ID}/form-fields`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ label, field_type, required, options })
+            });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not add field', 'error'); return; }
+            showToast('Field added', 'success');
+            document.getElementById('ff-label').value = '';
+            document.getElementById('ff-options').value = '';
+            document.getElementById('ff-required').checked = false;
+            loadFormFields();
+        }
+
+        async function deleteFormField(id) {
+            if (!confirm('Delete this field?')) return;
+            const res = await fetch(`/api/form-fields/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not delete field', 'error'); return; }
+            loadFormFields();
+        }
+
+        // ── Bookings ────────────────────────────────────────────────────────
+        async function loadBookings() {
+            const res = await fetch(`/api/events/${EVENT_ID}/bookings`);
+            const data = await res.json();
+            const tbody = document.getElementById('bookings-tbody');
+            const empty = document.getElementById('bookings-empty');
+            tbody.innerHTML = '';
+
+            if (!data.bookings || data.bookings.length === 0) {
+                empty.classList.remove('bk-hidden');
+                return;
+            }
+            empty.classList.add('bk-hidden');
+
+            data.bookings.forEach(b => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${esc(b.name)}</td>
+                    <td>${esc(b.email)}</td>
+                    <td>${fmtDateTime(b.start_time)}</td>
+                    <td>${esc(b.status)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+/* Bookings — app-specific styles only. All tokens come from aj-theme.css. */
+
+.bk-page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+}
+
+.bk-page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.bk-page-header h1 {
+    font-size: 22px;
+    margin: 0;
+}
+
+.bk-back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--body-text-70, rgba(255,255,255,0.7));
+    text-decoration: none;
+    font-size: 14px;
+    margin-bottom: 12px;
+}
+
+.bk-back-link:hover {
+    color: var(--teal);
+}
+
+.bk-card {
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+}
+
+.bk-card h2 {
+    font-size: 16px;
+    margin: 0 0 16px;
+}
+
+.bk-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.bk-table th {
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: 600;
+    color: var(--body-text-65, rgba(255,255,255,0.65));
+    border-bottom: 1px solid var(--card-bg);
+}
+
+.bk-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.bk-table tr:last-child td {
+    border-bottom: none;
+}
+
+.bk-status-pill {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.bk-status-draft   { background: rgba(94,110,126,0.25); color: var(--body-text-85, rgba(255,255,255,0.85)); }
+.bk-status-active  { background: rgba(116,227,169,0.2); color: var(--green); }
+.bk-status-closed  { background: rgba(94,110,126,0.25); color: var(--body-text-65, rgba(255,255,255,0.65)); }
+
+.bk-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--teal);
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    padding: 9px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.bk-btn:hover { opacity: 0.9; }
+
+.bk-btn-secondary {
+    background: transparent;
+    color: var(--body-text-85, rgba(255,255,255,0.85));
+    border: 1px solid rgba(255,255,255,0.15);
+}
+
+.bk-btn-danger {
+    background: transparent;
+    color: #e8617a;
+    border: 1px solid rgba(232,97,122,0.4);
+}
+
+.bk-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+.bk-form-row label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--body-text-85, rgba(255,255,255,0.85));
+}
+
+.bk-form-row input[type="text"],
+.bk-form-row input[type="number"],
+.bk-form-row input[type="date"],
+.bk-form-row input[type="time"],
+.bk-form-row input[type="datetime-local"],
+.bk-form-row select,
+.bk-form-row textarea {
+    background: var(--card-bg);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 9px 12px;
+    font-size: 14px;
+    color: inherit;
+    font-family: inherit;
+}
+
+.bk-form-row-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bk-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+}
+
+.bk-days-of-week {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.bk-day-chip {
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.15);
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.bk-day-chip.selected {
+    background: var(--teal);
+    color: #000;
+    border-color: var(--teal);
+}
+
+.bk-empty-state {
+    color: var(--body-text-65, rgba(255,255,255,0.65));
+    font-size: 14px;
+    padding: 24px 0;
+    text-align: center;
+}
+
+.bk-hidden { display: none; }
+
+.bk-warning-banner {
+    background: rgba(232, 161, 97, 0.12);
+    border: 1px solid rgba(232, 161, 97, 0.3);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.bk-source-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    color: var(--body-text-65, rgba(255,255,255,0.65));
+}
