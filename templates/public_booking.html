@@ -148,6 +148,7 @@
             if (EVENT.cover_image_url) {
                 const hero = document.getElementById('hero-img');
                 hero.src = EVENT.cover_image_url;
+                hero.style.objectPosition = `${EVENT.cover_image_position}% 50%`;
                 hero.style.display = 'block';
             }
 

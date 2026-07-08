@@ -64,10 +64,11 @@ DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 
 # Current schema version — MUST equal the highest `if current < N` migration
 # block below.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
 _HQ_TIMEOUT = 5
+_HQ_UPLOAD_TIMEOUT = 15  # multipart forwarding (feedback screenshots) needs more headroom
 
 # Days-of-week convention: Python date.weekday() — Monday=0 ... Sunday=6.
 # Used consistently in slot_rules.days_of_week and the cadence generator.
@@ -199,6 +200,14 @@ def init_db():
             db.execute("ALTER TABLE events ADD COLUMN directions TEXT")
         current = 2
 
+    if current < 3:
+        cols = get_cols(db, 'events')
+        if 'cover_image_position' not in cols:
+            # Horizontal focal point (0-100) for the hero image crop —
+            # object-position on the public page. Default 50 = center.
+            db.execute("ALTER TABLE events ADD COLUMN cover_image_position INTEGER DEFAULT 50")
+        current = 3
+
     db.execute(
         "INSERT INTO schema_meta (id, version) VALUES (1, ?) "
         "ON CONFLICT(id) DO UPDATE SET version = ?",
@@ -243,6 +252,27 @@ def is_valid_job_number(val):
 
 def is_valid_hex_color(val):
     return bool(re.fullmatch(r'#[0-9a-fA-F]{6}', str(val or '').strip()))
+
+
+def _normalize_dropbox_url(url):
+    """Dropbox shared links default to dl=0, which renders Dropbox's preview
+    page rather than the raw file — useless in an <img src>. Swap to raw=1
+    so the file loads directly. Only touches dropbox.com links; anything
+    else (Cloudinary, S3, direct hosting) passes through unchanged.
+    Same transformation belongs anywhere else in the ecosystem that accepts
+    a pasted Dropbox link (e.g. Projects) — this is a one-off local fix,
+    not yet centralized on HQ."""
+    url = (url or '').strip()
+    if not url or 'dropbox.com' not in url:
+        return url
+    if 'dl=0' in url:
+        return url.replace('dl=0', 'raw=1')
+    if 'dl=1' in url:
+        return url.replace('dl=1', 'raw=1')
+    if 'raw=1' in url:
+        return url
+    sep = '&' if '?' in url else '?'
+    return f'{url}{sep}raw=1'
 
 
 def _hq_get(path):
@@ -360,6 +390,31 @@ def proxy_user_change_password():
             },
             json=request.get_json(force=True, silent=True) or {},
             timeout=_HQ_TIMEOUT
+        )
+        return jsonify(r.json()), r.status_code
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+
+@app.route('/api/feedback', methods=['POST'])
+def proxy_feedback():
+    """Forwards a feedback widget submission (multipart, optional screenshot)
+    to HQ. No local session check here — submitter name/email travel as
+    form fields the widget already pulled from /auth/validate client-side;
+    this route's only job is adding the platform secret and relaying bytes.
+    Uses _HQ_UPLOAD_TIMEOUT, not _HQ_TIMEOUT — screenshot uploads need more
+    headroom than a plain reference-data GET."""
+    files = None
+    if 'screenshot' in request.files and request.files['screenshot'].filename:
+        f = request.files['screenshot']
+        files = {'screenshot': (f.filename, f.stream, f.mimetype)}
+    try:
+        r = req.post(
+            f'{_HQ_BASE}/api/feedback',
+            headers={'X-AJ-Key': PLATFORM_SECRET},
+            data=request.form.to_dict(),
+            files=files,
+            timeout=_HQ_UPLOAD_TIMEOUT
         )
         return jsonify(r.json()), r.status_code
     except Exception as e:
@@ -523,7 +578,17 @@ def update_event(event_id):
         url = (body['cover_image_url'] or '').strip()
         if url and not re.match(r'^https?://', url):
             return jsonify({'error': 'cover_image_url must start with http:// or https://'}), 400
-        fields['cover_image_url'] = url or None
+        fields['cover_image_url'] = _normalize_dropbox_url(url) or None
+
+    if 'cover_image_position' in body:
+        pos = body['cover_image_position']
+        try:
+            pos = int(pos)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'cover_image_position must be a number 0-100'}), 400
+        if not (0 <= pos <= 100):
+            return jsonify({'error': 'cover_image_position must be between 0 and 100'}), 400
+        fields['cover_image_position'] = pos
 
     if 'brand_color' in body:
         color = (body['brand_color'] or '').strip()
@@ -1136,6 +1201,7 @@ def public_get_event(slug):
             'notes': event['notes'],
             'directions': event['directions'],
             'cover_image_url': event['cover_image_url'],
+            'cover_image_position': event['cover_image_position'] if event['cover_image_position'] is not None else 50,
             'brand_color': event['brand_color'] or '#1a1a1a',
             'allow_waitlist': bool(event['allow_waitlist']),
             'allow_reschedule': bool(event['allow_reschedule']),

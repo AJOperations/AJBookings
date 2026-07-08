@@ -101,6 +101,11 @@
                     </div>
                 </div>
             </div>
+            <div class="bk-form-row bk-hidden" id="ev-image-preview-row">
+                <label for="ev-image-position">Image Focus — drag to reposition the crop</label>
+                <img id="ev-image-preview" class="bk-image-preview" alt="Cover image preview">
+                <input type="range" id="ev-image-position" min="0" max="100" value="50">
+            </div>
             <div class="bk-form-row">
                 <label for="ev-directions">Directions</label>
                 <textarea id="ev-directions" rows="2" placeholder="Parking, building entrance, floor — anything a client needs to actually find you"></textarea>
@@ -274,7 +279,32 @@
                     document.getElementById('ev-color').value = e.target.value;
                 }
             });
+
+            document.getElementById('ev-image').addEventListener('input', updateImagePreview);
+            document.getElementById('ev-image-position').addEventListener('input', updateImagePreview);
         });
+
+        function normalizeDropboxUrl(url) {
+            // Mirrors _normalize_dropbox_url() in bookingapp.py — preview-only,
+            // so what's shown here matches what renders after save.
+            if (!url || !url.includes('dropbox.com')) return url;
+            if (url.includes('dl=0')) return url.replace('dl=0', 'raw=1');
+            if (url.includes('dl=1')) return url.replace('dl=1', 'raw=1');
+            if (url.includes('raw=1')) return url;
+            return url + (url.includes('?') ? '&' : '?') + 'raw=1';
+        }
+
+        function updateImagePreview() {
+            const url = document.getElementById('ev-image').value.trim();
+            const pos = document.getElementById('ev-image-position').value;
+            const row = document.getElementById('ev-image-preview-row');
+            const img = document.getElementById('ev-image-preview');
+            row.classList.toggle('bk-hidden', !url);
+            if (url) {
+                img.src = normalizeDropboxUrl(url);
+                img.style.objectPosition = `${pos}% 50%`;
+            }
+        }
 
         function fmtDateTime(iso) {
             const d = new Date(iso);
@@ -363,6 +393,8 @@
             document.getElementById('ev-waitlist').checked = !!ev.allow_waitlist;
             document.getElementById('ev-reschedule').checked = !!ev.allow_reschedule;
             document.getElementById('ev-image').value = ev.cover_image_url || '';
+            document.getElementById('ev-image-position').value = ev.cover_image_position ?? 50;
+            updateImagePreview();
             document.getElementById('ev-directions').value = ev.directions || '';
             const color = ev.brand_color || '#1a1a1a';
             document.getElementById('ev-color').value = color;
@@ -380,6 +412,7 @@
                 allow_waitlist: document.getElementById('ev-waitlist').checked,
                 allow_reschedule: document.getElementById('ev-reschedule').checked,
                 cover_image_url: document.getElementById('ev-image').value.trim(),
+                cover_image_position: parseInt(document.getElementById('ev-image-position').value, 10),
                 directions: document.getElementById('ev-directions').value.trim(),
                 brand_color: document.getElementById('ev-color-hex').value.trim(),
             };
