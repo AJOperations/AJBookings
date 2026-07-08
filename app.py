@@ -32,6 +32,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.pdfbase import pdfmetrics
 
 from aj_auth import require_auth, get_current_user
 import ics_builder
@@ -1294,9 +1295,41 @@ def list_bookings(event_id):
 # flip here, not new plumbing in two places.
 
 def _fmt_slot_time(row):
+    """Full format — used by the CSV export, which has no column-width
+    constraint, so weekday + year stay in for clarity."""
     start = datetime.fromisoformat(row['start_time'])
     end = datetime.fromisoformat(row['end_time'])
     return f"{start.strftime('%a, %b %-d, %Y %-I:%M %p')} – {end.strftime('%-I:%M %p')}"
+
+
+def _fmt_slot_time_pdf(row):
+    """Compact format for the printed PDF table only. The full CSV format
+    (weekday + full year) measures ~2.36in at 9.5pt Helvetica — wider than
+    the Time column ever had room for, which is what caused rows to
+    overlap into the Location column. Dropping the year (redundant for a
+    same-year event; the export is generated close to the event date
+    anyway) and tightening the AM/PM spacing brings the worst realistic
+    case (long month name, crosses AM/PM) to ~2.0in, safely inside the
+    2.2in the column now gets — see _draw_pdf_section's col_x."""
+    start = datetime.fromisoformat(row['start_time'])
+    end = datetime.fromisoformat(row['end_time'])
+    return f"{start.strftime('%a, %b %-d')}, {start.strftime('%-I:%M')}–{end.strftime('%-I:%M %p')}" \
+        if start.strftime('%p') == end.strftime('%p') \
+        else f"{start.strftime('%a, %b %-d')}, {start.strftime('%-I:%M %p')}–{end.strftime('%-I:%M %p')}"
+
+
+def _truncate_to_width(text, font, size, max_width):
+    """Pixel-width-aware truncation — replaces naive character-count
+    slicing, which doesn't map to rendered width in a proportional font
+    like Helvetica and was the root cause of the Time column overflowing
+    into Location. Adds an ellipsis only when actually cut."""
+    text = text or ''
+    if pdfmetrics.stringWidth(text, font, size) <= max_width:
+        return text
+    ellipsis = '…'
+    while text and pdfmetrics.stringWidth(text + ellipsis, font, size) > max_width:
+        text = text[:-1]
+    return (text + ellipsis) if text else ellipsis
 
 
 # Each entry: id, label, value(row, event) -> str, and whether it belongs
@@ -1392,11 +1425,21 @@ def _draw_pdf_section(c, y, title, rows, event, fields, accent_hex, page_num=1):
     a section has no rows — the PDF simply omits it rather than showing an
     empty heading with nothing underneath. page_num is passed in (not
     reset to 1) so a page break inside the Waitlist section continues
-    numbering from wherever the Confirmed section left off."""
+    numbering from wherever the Confirmed section left off.
+
+    Column widths: Name 1.8in, Time 2.2in, Location gets the remainder
+    (~3.0in on letter). Time needs the extra room — even the compact PDF
+    time format (_fmt_slot_time_pdf) can hit ~2.0in on a long month name
+    that crosses AM/PM, so 2.2in leaves a safety margin. A 0.15in gutter
+    is subtracted from every column's truncation width so text can never
+    visually touch the next column, even at the absolute limit."""
     page_w, page_h = letter
     margin = 0.75 * inch
-    col_x = [margin, margin + 2.3 * inch, margin + 4.3 * inch]
+    col_x = [margin, margin + 1.8 * inch, margin + 4.0 * inch]
+    col_widths = [1.8 * inch, 2.2 * inch, (page_w - margin) - (margin + 4.0 * inch)]
+    gutter = 0.15 * inch
     row_h = 0.28 * inch
+    body_font, body_size = 'Helvetica', 9.5
 
     c.setFont('Helvetica-Bold', 11)
     c.setFillColor(colors.HexColor(accent_hex))
@@ -1431,11 +1474,16 @@ def _draw_pdf_section(c, y, title, rows, event, fields, accent_hex, page_num=1):
             c.rect(margin - 4, y - 6, (page_w - 2 * margin) + 8, row_h, fill=1, stroke=0)
         shaded = not shaded
 
-        c.setFont('Helvetica', 9.5)
+        values = [
+            field_by_id['name']['value'](row, event),
+            _fmt_slot_time_pdf(row),
+            field_by_id['location']['value'](row, event) or '—',
+        ]
+
+        c.setFont(body_font, body_size)
         c.setFillColor(colors.HexColor('#1a1a1a'))
-        c.drawString(col_x[0], y, field_by_id['name']['value'](row, event)[:40])
-        c.drawString(col_x[1], y, field_by_id['slot_time']['value'](row, event))
-        c.drawString(col_x[2], y, (field_by_id['location']['value'](row, event) or '—')[:32])
+        for val, x, w in zip(values, col_x, col_widths):
+            c.drawString(x, y, _truncate_to_width(val, body_font, body_size, w - gutter))
         y -= row_h
 
     return y - 14, page_num
