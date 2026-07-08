@@ -114,6 +114,26 @@
             <button class="aj-btn aj-btn-primary" id="save-event-btn" style="margin-top:8px;">Save Changes</button>
         </div>
 
+        <!-- Test Calendar Invite -->
+        <div class="aj-card bk-card">
+            <h2>Test Calendar Invite</h2>
+            <p style="color:var(--body-text-65); margin-top:-8px;">
+                Sends a real invite through Mailgun to the address below — a synthetic
+                slot (tomorrow, 10:00–10:30) tagged so it can never collide with a real
+                booking. Accept the invite in your own calendar app, then send the test
+                cancel and confirm it actually clears — that's the real end-to-end check,
+                not just that an email arrives.
+            </p>
+            <div class="bk-form-row">
+                <label for="test-invite-email">Send test to</label>
+                <input type="email" id="test-invite-email" placeholder="you@augustjackson.com" value="{{ current_user_email }}">
+            </div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+                <button class="aj-btn aj-btn-primary" id="send-test-invite-btn">Send Test Invite</button>
+                <button class="aj-btn" id="send-test-cancel-btn">Send Test Cancel</button>
+            </div>
+        </div>
+
         <!-- Cadence generator -->
         <div class="aj-card bk-card">
             <h2>Generate Slots — Cadence</h2>
@@ -282,7 +302,39 @@
 
             document.getElementById('ev-image').addEventListener('input', updateImagePreview);
             document.getElementById('ev-image-position').addEventListener('input', updateImagePreview);
+
+            document.getElementById('send-test-invite-btn').addEventListener('click', () => sendTestInvite('invite'));
+            document.getElementById('send-test-cancel-btn').addEventListener('click', () => sendTestInvite('cancel'));
         });
+
+        async function sendTestInvite(action) {
+            const to = document.getElementById('test-invite-email').value.trim();
+            if (!to) { showToast('Enter an email to send to', 'error'); return; }
+
+            const btn = document.getElementById(action === 'cancel' ? 'send-test-cancel-btn' : 'send-test-invite-btn');
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Sending…';
+
+            try {
+                const res = await fetch('/api/admin/test-invite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ event_id: EVENT_ID, to, action })
+                });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.error || 'Send failed', 'error'); return; }
+                showToast(
+                    action === 'cancel' ? `Test cancel sent to ${to}` : `Test invite sent to ${to}`,
+                    'success'
+                );
+            } catch (e) {
+                showToast('Send failed — check server logs', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        }
 
         function normalizeDropboxUrl(url) {
             // Mirrors _normalize_dropbox_url() in bookingapp.py — preview-only,

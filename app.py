@@ -4,8 +4,10 @@ Bookings — AJ internal scheduling/booking tool.
 Admin-internal app (any logged-in AJ user, no role restriction):
 event setup, manual + cadence-generated slots, custom form fields.
 Public booking surface (/book/<slug>): calendar-based slot picking,
-booking/waitlist, cancel + reschedule via token links. Email is stubbed
-(logs only) until HQ's /api/mailgun/send proxy exists.
+booking/waitlist, cancel + reschedule via token links. Confirmed/
+promoted bookings get a real calendar invite (METHOD:REQUEST); cancels
+and reschedule-releases get METHOD:CANCEL for the same UID — see
+ics_builder.py. Email routes through HQ's /api/email/send proxy.
 
 Architecture: same pattern as Invoice Tracker — standalone Railway app,
 aj_auth.py for admin auth, HQ proxy block for shared reference data.
@@ -14,9 +16,11 @@ aj_auth.py for admin auth, HQ proxy block for shared reference data.
 import os
 import re
 import json
+import base64
 import logging
 import secrets
 import sqlite3
+from html import escape as _esc
 from datetime import datetime, date, timedelta
 
 import requests as req
@@ -24,6 +28,7 @@ from flask import Flask, request, jsonify, g, session, render_template
 from flask_cors import CORS
 
 from aj_auth import require_auth, get_current_user
+import ics_builder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -68,7 +73,13 @@ SCHEMA_VERSION = 3
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
 _HQ_TIMEOUT = 5
-_HQ_UPLOAD_TIMEOUT = 15  # multipart forwarding (feedback screenshots) needs more headroom
+_HQ_UPLOAD_TIMEOUT = 15  # multipart forwarding (feedback screenshots, email attachments) needs more headroom
+
+# When set, every outbound email's recipients are redirected here instead of
+# the real address — applied in send_email() before calling HQ, per the
+# standard AJ pattern (HQ always delivers to whatever it receives; the
+# override is each calling app's responsibility). Leave unset in production.
+TEST_EMAIL_OVERRIDE = os.environ.get('TEST_EMAIL_OVERRIDE', '').strip()
 
 # Days-of-week convention: Python date.weekday() — Monday=0 ... Sunday=6.
 # Used consistently in slot_rules.days_of_week and the cadence generator.
@@ -421,24 +432,128 @@ def proxy_feedback():
         return jsonify({'error': str(e)}), 502
 
 
-# ── Email — STUBBED ───────────────────────────────────────────────────────────
-# Not wired to any route yet (booking flow is a later build pass). This is
-# the single seam to swap once HQ's /api/mailgun/send proxy route exists.
-#
-# TODO: swap this function body for a real call to HQ's Mailgun proxy:
-#   r = req.post(f'{_HQ_BASE}/api/mailgun/send',
-#                headers={'X-AJ-Key': PLATFORM_SECRET},
-#                json={'to': to, 'subject': subject, 'html': html,
-#                      'attachments': attachments or []})
-#   return r.status_code == 200
+# ── Email — wired to HQ's Mailgun proxy ────────────────────────────────────────
+# Calls HQ directly (same pattern as _hq_get()) rather than through a local
+# self-proxy route — this app runs --workers 1 for SQLite safety, and a
+# synchronous self-HTTP-call would deadlock the single worker against itself.
 
-def send_email(to, subject, html, attachments=None):
-    """STUB — logs instead of sending. Swap body for HQ Mailgun proxy call."""
-    logger.info(
-        "[EMAIL STUB] to=%s subject=%r attachments=%d (not sent — Mailgun proxy not built yet)",
-        to, subject, len(attachments or [])
+def send_email(to, subject, html_body, attachments=None):
+    """Sends via HQ's Mailgun proxy. `to` may be a single address or a list.
+    `attachments` is [{filename, data_b64, content_type}] — content_type is
+    optional (HQ defaults to application/octet-stream if omitted); calendar
+    invites must set it to 'text/calendar; method=REQUEST' or
+    'text/calendar; method=CANCEL' or they'll arrive as plain file downloads
+    instead of interactive invites. TEST_EMAIL_OVERRIDE, if set, redirects
+    all recipients before this call reaches HQ — HQ itself has no concept
+    of a test mode and always delivers to whatever it receives.
+    """
+    to_addrs = [to] if isinstance(to, str) else list(to or [])
+    if TEST_EMAIL_OVERRIDE:
+        logger.info("[EMAIL] TEST_EMAIL_OVERRIDE active — redirecting %s -> %s", to_addrs, TEST_EMAIL_OVERRIDE)
+        to_addrs = [TEST_EMAIL_OVERRIDE]
+
+    try:
+        r = req.post(
+            f'{_HQ_BASE}/api/email/send',
+            headers={'X-AJ-Key': PLATFORM_SECRET, 'Content-Type': 'application/json'},
+            json={
+                'to': to_addrs,
+                'subject': subject,
+                'html_body': html_body,
+                'attachments': attachments or [],
+            },
+            timeout=_HQ_UPLOAD_TIMEOUT
+        )
+        if r.status_code != 200:
+            logger.error("[EMAIL] HQ proxy returned %s: %s", r.status_code, r.text[:500])
+            return False
+        data = r.json()
+        if data.get('stub'):
+            logger.info("[EMAIL] HQ is in stub mode (SMTP creds not set) — to=%s subject=%r", to_addrs, subject)
+        return bool(data.get('ok'))
+    except Exception as e:
+        logger.error("[EMAIL] send failed: %s", e)
+        return False
+
+
+# ── Calendar invite emails ───────────────────────────────────────────────────
+# Shared by all three real send sites: booking confirmed, waitlist promoted
+# to confirmed, and booking cancelled (explicit cancel + reschedule-releases-
+# old-slot). Keeping the ICS-building + email copy in one place so the three
+# sites can't quietly drift from each other.
+
+BOOKINGS_BASE_URL = 'https://ajbookings.up.railway.app'
+
+
+def _slot_location(event, slot):
+    return (slot['location_override'] if slot['location_override'] else event['location']) or ''
+
+
+def _invite_description(event, cancel_url):
+    lines = [f"Booking for {event['name']}."]
+    if event['notes']:
+        lines.append(event['notes'])
+    if event['directions']:
+        lines.append(f"Directions: {event['directions']}")
+    lines.append(f"Manage this booking: {BOOKINGS_BASE_URL}{cancel_url}")
+    return '\n'.join(lines)
+
+
+def send_booking_invite(*, booking_id, name, email, event, slot, cancel_url):
+    """Sends the confirmation email with a METHOD:REQUEST calendar invite
+    attached. Called when a booking is created as 'confirmed' and when a
+    waitlisted booking is promoted to confirmed — never for waitlisted
+    status itself, since nothing is actually booked yet at that point."""
+    ics_bytes = ics_builder.build_invite_ics(
+        uid=ics_builder.booking_uid(booking_id),
+        summary=event['name'],
+        start=slot['start_time'],
+        end=slot['end_time'],
+        attendee_email=email,
+        attendee_name=name,
+        location=_slot_location(event, slot),
+        description=_invite_description(event, cancel_url),
     )
-    return True
+    html_body = (
+        f"<p>You're confirmed for <strong>{_esc(event['name'])}</strong>.</p>"
+        f"<p>A calendar invite is attached — accept it to add this to your calendar.</p>"
+        f"<p>Need to make a change? <a href=\"{BOOKINGS_BASE_URL}{cancel_url}\">Manage your booking</a>.</p>"
+    )
+    return send_email(
+        email, f"You're confirmed — {event['name']}", html_body,
+        attachments=[{
+            'filename': 'invite.ics',
+            'data_b64': base64.b64encode(ics_bytes).decode(),
+            'content_type': 'text/calendar; method=REQUEST',
+        }],
+    )
+
+
+def send_booking_cancel(*, booking_id, name, email, event, slot):
+    """Sends the cancellation email with a METHOD:CANCEL calendar invite for
+    the same UID as the original booking invite, so an accepted invite gets
+    pulled off the recipient's calendar rather than left orphaned."""
+    ics_bytes = ics_builder.build_cancel_ics(
+        uid=ics_builder.booking_uid(booking_id),
+        summary=event['name'],
+        start=slot['start_time'],
+        end=slot['end_time'],
+        attendee_email=email,
+        attendee_name=name,
+        location=_slot_location(event, slot),
+    )
+    html_body = (
+        f"<p>Your booking for <strong>{_esc(event['name'])}</strong> has been cancelled.</p>"
+        f"<p>This should also clear the event from your calendar.</p>"
+    )
+    return send_email(
+        email, f"Cancelled — {event['name']}", html_body,
+        attachments=[{
+            'filename': 'cancel.ics',
+            'data_b64': base64.b64encode(ics_bytes).decode(),
+            'content_type': 'text/calendar; method=CANCEL',
+        }],
+    )
 
 
 # ── Auth helper ───────────────────────────────────────────────────────────────
@@ -461,7 +576,9 @@ def index():
 @app.route('/admin/events/<int:event_id>')
 @require_auth
 def admin_event_detail_page(event_id):
-    return render_template('admin_event_detail.html', event_id=event_id)
+    user = get_current_user()
+    return render_template('admin_event_detail.html', event_id=event_id,
+                            current_user_email=(user.get('email') if user else ''))
 
 
 # ── /api/summary (required by convention) ────────────────────────────────────
@@ -1064,8 +1181,9 @@ def promote_booking(booking_id):
     """
     Manual waitlist promotion only — no auto-promotion when a slot opens
     up. Admin sees the waitlist on the event detail page and triggers this
-    explicitly. Confirms the booking if there's room; sends the (stubbed)
-    promotion email either way it succeeds.
+    explicitly. Confirms the booking if there's room, then sends the same
+    calendar invite a normally-confirmed booking gets — nothing was on the
+    recipient's calendar while waitlisted, so this is their first invite.
     """
     db = get_db()
     booking = db.execute("SELECT * FROM bookings WHERE id = ?", (booking_id,)).fetchone()
@@ -1081,15 +1199,89 @@ def promote_booking(booking_id):
     if confirmed_count >= slot['capacity']:
         return jsonify({'error': 'slot is still full — no room to promote'}), 409
 
+    event = db.execute("SELECT * FROM events WHERE id = ?", (slot['event_id'],)).fetchone()
+
     db.execute("UPDATE bookings SET status = 'confirmed' WHERE id = ?", (booking_id,))
     db.commit()
 
-    send_email(
-        booking['email'],
-        "You're confirmed!",
-        f"A spot opened up and you've been moved from the waitlist to confirmed for your booking."
+    cancel_url = f"/book/{event['slug']}/cancel/{booking['cancel_token']}"
+    send_booking_invite(
+        booking_id=booking['id'], name=booking['name'], email=booking['email'],
+        event=event, slot=slot, cancel_url=cancel_url,
     )
     return jsonify({'promoted': True})
+
+
+@app.route('/api/admin/test-invite', methods=['POST'])
+@require_auth
+def admin_test_invite():
+    """
+    Sends a real invite or cancel through the exact same send_email() /
+    ics_builder path a live booking uses — the only thing synthetic is the
+    slot (tomorrow 10:00-10:30 Central) and the UID, which is namespaced
+    'test-...' so it can never collide with a real booking's UID.
+
+    Two calls, same UID, is the actual test: send 'invite', accept it in
+    your calendar app, then send 'cancel' and confirm it disappears. That
+    proves the REQUEST/CANCEL pairing works end to end — a single send
+    only proves email delivery, not that the invite behaves like one.
+    """
+    user = get_current_user()
+    body = request.get_json(force=True, silent=True) or {}
+    event_id = body.get('event_id')
+    action = body.get('action', 'invite')
+    to_email = (body.get('to') or (user.get('email') if user else '') or '').strip()
+
+    if action not in ('invite', 'cancel'):
+        return jsonify({'error': "action must be 'invite' or 'cancel'"}), 400
+    if not to_email or not _is_valid_email(to_email):
+        return jsonify({'error': 'A valid recipient email is required'}), 400
+
+    db = get_db()
+    event = db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not event:
+        return jsonify({'error': 'event not found'}), 404
+
+    tomorrow = date.today() + timedelta(days=1)
+    test_start = datetime.combine(tomorrow, datetime.min.time().replace(hour=10))
+    test_end = test_start + timedelta(minutes=30)
+    uid = ics_builder.test_uid(event['id'], (user.get('id') if user else 'admin'))
+    to_name = (user.get('name') if user else None) or to_email
+
+    location = event['location'] or ''
+    if action == 'cancel':
+        ics_bytes = ics_builder.build_cancel_ics(
+            uid=uid, summary=f"[TEST] {event['name']}", start=test_start, end=test_end,
+            attendee_email=to_email, attendee_name=to_name, location=location,
+        )
+        subject = f"[TEST] Cancelled — {event['name']}"
+        html_body = (
+            "<p>This is a <strong>test cancellation</strong> from the AJ Bookings invite pipeline.</p>"
+            "<p>If the earlier test invite is on your calendar, it should now disappear or show as cancelled.</p>"
+        )
+        filename, content_type = 'test-cancel.ics', 'text/calendar; method=CANCEL'
+    else:
+        ics_bytes = ics_builder.build_invite_ics(
+            uid=uid, summary=f"[TEST] {event['name']}", start=test_start, end=test_end,
+            attendee_email=to_email, attendee_name=to_name, location=location,
+            description="Test invite from AJ Bookings — safe to accept or decline. "
+                        "Trigger a test cancel from the same admin panel afterward to confirm that path too.",
+        )
+        subject = f"[TEST] Calendar invite — {event['name']}"
+        html_body = (
+            "<p>This is a <strong>test invite</strong> from the AJ Bookings calendar-invite pipeline.</p>"
+            "<p>Accept it, then come back and send a test cancel to confirm it's pulled off your calendar.</p>"
+        )
+        filename, content_type = 'test-invite.ics', 'text/calendar; method=REQUEST'
+
+    ok = send_email(to_email, subject, html_body, attachments=[{
+        'filename': filename,
+        'data_b64': base64.b64encode(ics_bytes).decode(),
+        'content_type': content_type,
+    }])
+    if not ok:
+        return jsonify({'error': 'send failed — check server logs'}), 502
+    return jsonify({'sent': True, 'to': to_email, 'action': action})
 
 
 # ── Public booking surface (/book/<slug>) ─────────────────────────────────────
@@ -1149,8 +1341,15 @@ def public_reschedule_action(slug, token):
     if not event['allow_reschedule']:
         return render_template('public_booking.html', slug=event['slug'], reschedule_error='not_allowed')
 
+    was_confirmed = booking['status'] == 'confirmed'
     db.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (booking['id'],))
     db.commit()
+
+    if was_confirmed:
+        send_booking_cancel(
+            booking_id=booking['id'], name=booking['name'], email=booking['email'],
+            event=event, slot=slot,
+        )
     return render_template('public_booking.html', slug=event['slug'], reschedule_released=True)
 
 
@@ -1281,7 +1480,10 @@ def public_create_booking(slug):
     reschedule_url = f'/book/{slug}/reschedule/{reschedule_token}' if event['allow_reschedule'] else None
 
     if status == 'confirmed':
-        send_email(email, "You're confirmed", f"Confirmed for {event['name']}. Manage: {cancel_url}")
+        send_booking_invite(
+            booking_id=cur.lastrowid, name=name, email=email,
+            event=event, slot=slot, cancel_url=cancel_url,
+        )
     else:
         send_email(email, "You're on the waitlist", f"Waitlisted for {event['name']}. Manage: {cancel_url}")
 
@@ -1304,8 +1506,17 @@ def public_cancel_booking(token):
     if booking['status'] == 'cancelled':
         return jsonify({'error': 'already cancelled'}), 400
 
+    was_confirmed = booking['status'] == 'confirmed'
     db.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (booking['id'],))
     db.commit()
+
+    if was_confirmed:
+        slot = db.execute("SELECT * FROM slots WHERE id = ?", (booking['slot_id'],)).fetchone()
+        event = db.execute("SELECT * FROM events WHERE id = ?", (slot['event_id'],)).fetchone()
+        send_booking_cancel(
+            booking_id=booking['id'], name=booking['name'], email=booking['email'],
+            event=event, slot=slot,
+        )
     return jsonify({'cancelled': True})
 
 
