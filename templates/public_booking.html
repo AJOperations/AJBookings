@@ -16,7 +16,13 @@
         .wrap { max-width: 600px; margin: 0 auto; padding: 0 20px 80px; }
         .hero {
             width: 100%;
-            height: 220px;
+            /* Locked to the same 560:220 ratio as the admin editor's crop
+               frame (admin_event_detail.html, .bk-image-editor) — aspect-
+               ratio instead of a fixed height keeps that shape constant
+               across viewport widths. Fixed height would let this crop
+               drift from the admin preview as the page gets narrower. If
+               this ratio ever changes, update the admin frame to match. */
+            aspect-ratio: 560 / 220;
             object-fit: cover;
             border-radius: 0 0 16px 16px;
             margin-bottom: 24px;
@@ -148,7 +154,7 @@
             if (EVENT.cover_image_url) {
                 const hero = document.getElementById('hero-img');
                 hero.src = EVENT.cover_image_url;
-                hero.style.objectPosition = `${EVENT.cover_image_position}% 50%`;
+                hero.style.objectPosition = `${EVENT.cover_image_position}% ${EVENT.cover_image_position_y}%`;
                 hero.style.display = 'block';
             }
 

@@ -164,14 +164,39 @@
     font-size: 12px;
 }
 
-.bk-image-preview {
+.bk-image-editor {
+    /* Must match .hero's aspect-ratio on the public booking page
+       (templates/public_booking.html) — this is the actual crop shape
+       shown live, not an approximation. If one changes, update the other. */
     width: 100%;
-    max-width: 360px;
-    height: 120px;
-    object-fit: cover;
+    max-width: 480px;
+    aspect-ratio: 560 / 220;
     border-radius: 8px;
     border: 0.5px solid var(--border2);
-    display: block;
-    margin-bottom: 4px;
+    overflow: hidden;
     background: var(--surface2);
+    cursor: grab;
+    touch-action: none;
+    position: relative;
+}
+
+.bk-image-editor.dragging {
+    cursor: grabbing;
+}
+
+.bk-image-editor img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    user-select: none;
+    pointer-events: none;
+}
+
+.bk-image-editor-hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
 }

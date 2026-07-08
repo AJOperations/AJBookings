@@ -69,7 +69,7 @@ DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 
 # Current schema version — MUST equal the highest `if current < N` migration
 # block below.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
 _HQ_TIMEOUT = 5
@@ -218,6 +218,17 @@ def init_db():
             # object-position on the public page. Default 50 = center.
             db.execute("ALTER TABLE events ADD COLUMN cover_image_position INTEGER DEFAULT 50")
         current = 3
+
+    if current < 4:
+        cols = get_cols(db, 'events')
+        if 'cover_image_position_y' not in cols:
+            # Vertical focal point (0-100), added alongside the horizontal
+            # one so the admin editor can support full drag-to-reposition
+            # instead of a left/right-only slider. Default 50 = center —
+            # existing events with only an X position keep their old
+            # horizontal framing and default to vertically centered.
+            db.execute("ALTER TABLE events ADD COLUMN cover_image_position_y INTEGER DEFAULT 50")
+        current = 4
 
     db.execute(
         "INSERT INTO schema_meta (id, version) VALUES (1, ?) "
@@ -706,6 +717,16 @@ def update_event(event_id):
         if not (0 <= pos <= 100):
             return jsonify({'error': 'cover_image_position must be between 0 and 100'}), 400
         fields['cover_image_position'] = pos
+
+    if 'cover_image_position_y' in body:
+        pos_y = body['cover_image_position_y']
+        try:
+            pos_y = int(pos_y)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'cover_image_position_y must be a number 0-100'}), 400
+        if not (0 <= pos_y <= 100):
+            return jsonify({'error': 'cover_image_position_y must be between 0 and 100'}), 400
+        fields['cover_image_position_y'] = pos_y
 
     if 'brand_color' in body:
         color = (body['brand_color'] or '').strip()
@@ -1401,6 +1422,7 @@ def public_get_event(slug):
             'directions': event['directions'],
             'cover_image_url': event['cover_image_url'],
             'cover_image_position': event['cover_image_position'] if event['cover_image_position'] is not None else 50,
+            'cover_image_position_y': event['cover_image_position_y'] if event['cover_image_position_y'] is not None else 50,
             'brand_color': event['brand_color'] or '#1a1a1a',
             'allow_waitlist': bool(event['allow_waitlist']),
             'allow_reschedule': bool(event['allow_reschedule']),

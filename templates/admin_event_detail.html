@@ -102,9 +102,14 @@
                 </div>
             </div>
             <div class="bk-form-row bk-hidden" id="ev-image-preview-row">
-                <label for="ev-image-position">Image Focus — drag to reposition the crop</label>
-                <img id="ev-image-preview" class="bk-image-preview" alt="Cover image preview">
-                <input type="range" id="ev-image-position" min="0" max="100" value="50">
+                <label>Image Focus — drag the image to reposition the crop</label>
+                <div class="bk-image-editor" id="ev-image-editor">
+                    <img id="ev-image-preview" alt="Cover image preview" draggable="false">
+                </div>
+                <div class="bk-image-editor-hint">
+                    Matches the exact crop shown on the public booking page
+                    <button type="button" class="aj-btn aj-btn-ghost" id="ev-image-center-btn" style="margin-left:8px; padding:2px 10px; font-size:12px;">Center</button>
+                </div>
             </div>
             <div class="bk-form-row">
                 <label for="ev-directions">Directions</label>
@@ -301,7 +306,12 @@
             });
 
             document.getElementById('ev-image').addEventListener('input', updateImagePreview);
-            document.getElementById('ev-image-position').addEventListener('input', updateImagePreview);
+            document.getElementById('ev-image-center-btn').addEventListener('click', () => {
+                imgPosX = 50;
+                imgPosY = 50;
+                applyImagePosition();
+            });
+            setupImageDrag();
 
             document.getElementById('send-test-invite-btn').addEventListener('click', () => sendTestInvite('invite'));
             document.getElementById('send-test-cancel-btn').addEventListener('click', () => sendTestInvite('cancel'));
@@ -346,16 +356,88 @@
             return url + (url.includes('?') ? '&' : '?') + 'raw=1';
         }
 
+        // ── Cover image focal point — drag-based 2D positioner ──────────────
+        // imgPosX/imgPosY (0-100 each) drive object-position on the preview
+        // AND get saved to cover_image_position / cover_image_position_y.
+        // The editor frame (.bk-image-editor) is built to the exact same
+        // aspect ratio as the public hero image (see main.css + public_
+        // booking.html) — that match is what makes "what you see here" the
+        // same crop as "what ships," rather than an approximation.
+        let imgPosX = 50;
+        let imgPosY = 50;
+        let _dragState = null;
+
+        function applyImagePosition() {
+            document.getElementById('ev-image-preview').style.objectPosition = `${imgPosX}% ${imgPosY}%`;
+        }
+
+        function clampPct(v) {
+            return Math.max(0, Math.min(100, Math.round(v)));
+        }
+
         function updateImagePreview() {
             const url = document.getElementById('ev-image').value.trim();
-            const pos = document.getElementById('ev-image-position').value;
             const row = document.getElementById('ev-image-preview-row');
             const img = document.getElementById('ev-image-preview');
             row.classList.toggle('bk-hidden', !url);
             if (url) {
                 img.src = normalizeDropboxUrl(url);
-                img.style.objectPosition = `${pos}% 50%`;
+                applyImagePosition();
             }
+        }
+
+        function setupImageDrag() {
+            const frame = document.getElementById('ev-image-editor');
+            const img = document.getElementById('ev-image-preview');
+
+            frame.addEventListener('pointerdown', (e) => {
+                if (!img.src) return;
+                frame.setPointerCapture(e.pointerId);
+                frame.classList.add('dragging');
+
+                // Map drag pixels 1:1 against how much the image actually
+                // overflows the frame in each axis (object-fit:cover always
+                // overflows on at least one axis) — matching against raw
+                // frame width/height instead would make the drag feel too
+                // sensitive or too sluggish depending on the image's own
+                // proportions relative to the frame.
+                const frameRect = frame.getBoundingClientRect();
+                const naturalW = img.naturalWidth || frameRect.width;
+                const naturalH = img.naturalHeight || frameRect.height;
+                const scale = Math.max(frameRect.width / naturalW, frameRect.height / naturalH);
+                const overflowX = Math.max((naturalW * scale) - frameRect.width, 0);
+                const overflowY = Math.max((naturalH * scale) - frameRect.height, 0);
+
+                _dragState = {
+                    startX: e.clientX, startY: e.clientY,
+                    startPosX: imgPosX, startPosY: imgPosY,
+                    overflowX, overflowY,
+                };
+            });
+
+            frame.addEventListener('pointermove', (e) => {
+                if (!_dragState) return;
+                const dx = e.clientX - _dragState.startX;
+                const dy = e.clientY - _dragState.startY;
+
+                // Dragging right reveals the image's left side, so position
+                // percentage moves opposite the drag direction — matches
+                // how every other "drag to reposition" photo editor behaves.
+                if (_dragState.overflowX > 0) {
+                    imgPosX = clampPct(_dragState.startPosX - (dx / _dragState.overflowX) * 100);
+                }
+                if (_dragState.overflowY > 0) {
+                    imgPosY = clampPct(_dragState.startPosY - (dy / _dragState.overflowY) * 100);
+                }
+                applyImagePosition();
+            });
+
+            ['pointerup', 'pointercancel'].forEach(evt => {
+                frame.addEventListener(evt, () => {
+                    _dragState = null;
+                    frame.classList.remove('dragging');
+                });
+            });
         }
 
         function fmtDateTime(iso) {
@@ -445,7 +527,8 @@
             document.getElementById('ev-waitlist').checked = !!ev.allow_waitlist;
             document.getElementById('ev-reschedule').checked = !!ev.allow_reschedule;
             document.getElementById('ev-image').value = ev.cover_image_url || '';
-            document.getElementById('ev-image-position').value = ev.cover_image_position ?? 50;
+            imgPosX = ev.cover_image_position ?? 50;
+            imgPosY = ev.cover_image_position_y ?? 50;
             updateImagePreview();
             document.getElementById('ev-directions').value = ev.directions || '';
             const color = ev.brand_color || '#1a1a1a';
@@ -464,7 +547,8 @@
                 allow_waitlist: document.getElementById('ev-waitlist').checked,
                 allow_reschedule: document.getElementById('ev-reschedule').checked,
                 cover_image_url: document.getElementById('ev-image').value.trim(),
-                cover_image_position: parseInt(document.getElementById('ev-image-position').value, 10),
+                cover_image_position: imgPosX,
+                cover_image_position_y: imgPosY,
                 directions: document.getElementById('ev-directions').value.trim(),
                 brand_color: document.getElementById('ev-color-hex').value.trim(),
             };
