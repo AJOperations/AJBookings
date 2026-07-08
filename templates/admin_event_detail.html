@@ -119,6 +119,32 @@
             <button class="aj-btn aj-btn-primary" id="save-event-btn" style="margin-top:8px;">Save Changes</button>
         </div>
 
+        <!-- Custom messages — prepended above the system-generated info in
+             each corresponding email/invite. Never a replacement, so the
+             cancel/reschedule links always go out regardless of what a
+             producer writes here. -->
+        <div class="aj-card bk-card">
+            <h2>Messages</h2>
+            <p style="color:var(--body-text-65); margin-top:-8px;">
+                Optional. Anything you write here appears above the standard booking
+                details and cancel/reschedule links — it doesn't replace them. Leave
+                blank to send the default system message only.
+            </p>
+            <div class="bk-form-row">
+                <label for="msg-confirmation">Confirmation message</label>
+                <textarea id="msg-confirmation" rows="2" placeholder="Shown on the confirmation email and calendar invite when a booking is confirmed or promoted from the waitlist."></textarea>
+            </div>
+            <div class="bk-form-row">
+                <label for="msg-waitlist">Waitlist message</label>
+                <textarea id="msg-waitlist" rows="2" placeholder="Shown on the email sent when someone is added to the waitlist."></textarea>
+            </div>
+            <div class="bk-form-row">
+                <label for="msg-cancellation">Cancellation message</label>
+                <textarea id="msg-cancellation" rows="2" placeholder="Shown on the email sent when a booking is cancelled."></textarea>
+            </div>
+            <button class="aj-btn aj-btn-primary" id="save-messages-btn">Save Messages</button>
+        </div>
+
         <!-- Test Calendar Invite -->
         <div class="aj-card bk-card">
             <h2>Test Calendar Invite</h2>
@@ -257,7 +283,13 @@
 
         <!-- Bookings -->
         <div class="aj-card bk-card">
-            <h2>Bookings</h2>
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                <h2 style="margin:0;">Bookings</h2>
+                <div style="display:flex; gap:8px;">
+                    <a class="aj-btn aj-btn-ghost" id="export-csv-btn" href="#"><i class="ti ti-file-spreadsheet"></i> Export CSV</a>
+                    <a class="aj-btn aj-btn-ghost" id="export-pdf-btn" href="#"><i class="ti ti-file-type-pdf"></i> Export PDF</a>
+                </div>
+            </div>
             <table class="bk-table">
                 <thead><tr><th>Name</th><th>Email</th><th>Slot</th><th>Status</th><th></th></tr></thead>
                 <tbody id="bookings-tbody"></tbody>
@@ -280,6 +312,9 @@
             wireJobAutocomplete('ev-job', 'ev-job-suggestions');
 
             document.getElementById('save-event-btn').addEventListener('click', saveEvent);
+            document.getElementById('save-messages-btn').addEventListener('click', saveMessages);
+            document.getElementById('export-csv-btn').href = `/api/events/${EVENT_ID}/export/csv`;
+            document.getElementById('export-pdf-btn').href = `/api/events/${EVENT_ID}/export/pdf`;
             document.getElementById('generate-slots-btn').addEventListener('click', generateSlots);
             document.getElementById('add-slot-btn').addEventListener('click', addManualSlot);
             document.getElementById('add-field-btn').addEventListener('click', addFormField);
@@ -534,6 +569,11 @@
             const color = ev.brand_color || '#1a1a1a';
             document.getElementById('ev-color').value = color;
             document.getElementById('ev-color-hex').value = color;
+
+            const msgs = ev.custom_messages || {};
+            document.getElementById('msg-confirmation').value = msgs.confirmation || '';
+            document.getElementById('msg-waitlist').value = msgs.waitlist || '';
+            document.getElementById('msg-cancellation').value = msgs.cancellation || '';
         }
 
         async function saveEvent() {
@@ -559,6 +599,22 @@
             if (!res.ok) { showToast(data.error || 'Could not save', 'error'); return; }
             showToast('Saved', 'success');
             loadEvent();
+        }
+
+        async function saveMessages() {
+            const body = {
+                custom_messages: {
+                    confirmation: document.getElementById('msg-confirmation').value.trim(),
+                    waitlist: document.getElementById('msg-waitlist').value.trim(),
+                    cancellation: document.getElementById('msg-cancellation').value.trim(),
+                }
+            };
+            const res = await fetch(`/api/events/${EVENT_ID}`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not save messages', 'error'); return; }
+            showToast('Messages saved', 'success');
         }
 
         // ── Slot rules / cadence generator ─────────────────────────────────

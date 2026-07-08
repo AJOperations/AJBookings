@@ -15,6 +15,8 @@ aj_auth.py for admin auth, HQ proxy block for shared reference data.
 
 import os
 import re
+import io
+import csv
 import json
 import base64
 import logging
@@ -24,8 +26,12 @@ from html import escape as _esc
 from datetime import datetime, date, timedelta
 
 import requests as req
-from flask import Flask, request, jsonify, g, session, render_template
+from flask import Flask, request, jsonify, g, session, render_template, Response
 from flask_cors import CORS
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.pdfgen import canvas as pdf_canvas
 
 from aj_auth import require_auth, get_current_user
 import ics_builder
@@ -69,7 +75,7 @@ DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 
 # Current schema version — MUST equal the highest `if current < N` migration
 # block below.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
 _HQ_TIMEOUT = 5
@@ -85,6 +91,7 @@ TEST_EMAIL_OVERRIDE = os.environ.get('TEST_EMAIL_OVERRIDE', '').strip()
 # Used consistently in slot_rules.days_of_week and the cadence generator.
 VALID_FIELD_TYPES = ('text', 'select', 'checkbox')
 VALID_EVENT_STATUSES = ('draft', 'active', 'closed')
+VALID_MESSAGE_TYPES = ('confirmation', 'waitlist', 'cancellation')
 
 # Cap how much a single cadence rule can generate in one call — guards
 # against a typo'd date range (e.g. wrong century) silently trying to
@@ -229,6 +236,19 @@ def init_db():
             # horizontal framing and default to vertically centered.
             db.execute("ALTER TABLE events ADD COLUMN cover_image_position_y INTEGER DEFAULT 50")
         current = 4
+
+    if current < 5:
+        cols = get_cols(db, 'events')
+        if 'custom_messages' not in cols:
+            # JSON object, keyed by message type: 'confirmation', 'waitlist',
+            # 'cancellation'. Each value (if present) is producer-written
+            # copy that gets PREPENDED above the system-generated event
+            # info + cancel/reschedule links in the matching email/invite —
+            # never a replacement, so a producer can't accidentally ship an
+            # email with no way to manage the booking. Missing/blank keys
+            # mean "no custom message for this type," not an error.
+            db.execute("ALTER TABLE events ADD COLUMN custom_messages TEXT DEFAULT '{}'")
+        current = 5
 
     db.execute(
         "INSERT INTO schema_meta (id, version) VALUES (1, ?) "
@@ -500,17 +520,43 @@ def _slot_location(event, slot):
     return (slot['location_override'] if slot['location_override'] else event['location']) or ''
 
 
-def _invite_description(event, cancel_url):
-    lines = [f"Booking for {event['name']}."]
+def _custom_message(event, message_type):
+    """Pulls a producer-written message for this event/type, if set. Never
+    raises on malformed JSON — a bad value here should degrade to 'no custom
+    message', not break the send."""
+    try:
+        msgs = json.loads(event['custom_messages'] or '{}')
+    except (ValueError, TypeError):
+        return ''
+    return (msgs.get(message_type) or '').strip()
+
+
+def _manage_links_text(event, cancel_url, reschedule_url=None):
+    """Plain-text manage-booking lines shared by the ICS description and,
+    in HTML form, the email body. Reschedule only appears when the event
+    allows it and a reschedule_url was actually passed in."""
+    lines = [f"Cancel: {BOOKINGS_BASE_URL}{cancel_url}"]
+    if event['allow_reschedule'] and reschedule_url:
+        lines.append(f"Reschedule: {BOOKINGS_BASE_URL}{reschedule_url}")
+    return lines
+
+
+def _invite_description(event, cancel_url, reschedule_url=None):
+    lines = []
+    custom = _custom_message(event, 'confirmation')
+    if custom:
+        lines.append(custom)
+        lines.append('')  # blank line separating producer copy from system info
+    lines.append(f"Booking for {event['name']}.")
     if event['notes']:
         lines.append(event['notes'])
     if event['directions']:
         lines.append(f"Directions: {event['directions']}")
-    lines.append(f"Manage this booking: {BOOKINGS_BASE_URL}{cancel_url}")
+    lines.extend(_manage_links_text(event, cancel_url, reschedule_url))
     return '\n'.join(lines)
 
 
-def send_booking_invite(*, booking_id, name, email, event, slot, cancel_url):
+def send_booking_invite(*, booking_id, name, email, event, slot, cancel_url, reschedule_url=None):
     """Sends the confirmation email with a METHOD:REQUEST calendar invite
     attached. Called when a booking is created as 'confirmed' and when a
     waitlisted booking is promoted to confirmed — never for waitlisted
@@ -523,12 +569,19 @@ def send_booking_invite(*, booking_id, name, email, event, slot, cancel_url):
         attendee_email=email,
         attendee_name=name,
         location=_slot_location(event, slot),
-        description=_invite_description(event, cancel_url),
+        description=_invite_description(event, cancel_url, reschedule_url),
     )
+    custom = _custom_message(event, 'confirmation')
+    custom_html = f"<p>{_esc(custom)}</p>" if custom else ''
+    manage_html = f'<p>Need to make a change? <a href="{BOOKINGS_BASE_URL}{cancel_url}">Cancel</a>'
+    if event['allow_reschedule'] and reschedule_url:
+        manage_html += f' or <a href="{BOOKINGS_BASE_URL}{reschedule_url}">reschedule</a>'
+    manage_html += ' your booking.</p>'
     html_body = (
+        f"{custom_html}"
         f"<p>You're confirmed for <strong>{_esc(event['name'])}</strong>.</p>"
         f"<p>A calendar invite is attached — accept it to add this to your calendar.</p>"
-        f"<p>Need to make a change? <a href=\"{BOOKINGS_BASE_URL}{cancel_url}\">Manage your booking</a>.</p>"
+        f"{manage_html}"
     )
     return send_email(
         email, f"You're confirmed — {event['name']}", html_body,
@@ -538,6 +591,21 @@ def send_booking_invite(*, booking_id, name, email, event, slot, cancel_url):
             'content_type': 'text/calendar; method=REQUEST',
         }],
     )
+
+
+def send_booking_waitlist(*, name, email, event, cancel_url):
+    """Sent when a new booking lands on the waitlist instead of being
+    confirmed outright — no calendar invite yet, since nothing is actually
+    booked until a producer promotes it."""
+    custom = _custom_message(event, 'waitlist')
+    custom_html = f"<p>{_esc(custom)}</p>" if custom else ''
+    html_body = (
+        f"{custom_html}"
+        f"<p>You're on the waitlist for <strong>{_esc(event['name'])}</strong>.</p>"
+        f"<p>We'll send a calendar invite if a spot opens up.</p>"
+        f"<p>Need to step off the waitlist? <a href=\"{BOOKINGS_BASE_URL}{cancel_url}\">Cancel</a>.</p>"
+    )
+    return send_email(email, f"You're on the waitlist — {event['name']}", html_body)
 
 
 def send_booking_cancel(*, booking_id, name, email, event, slot):
@@ -553,7 +621,10 @@ def send_booking_cancel(*, booking_id, name, email, event, slot):
         attendee_name=name,
         location=_slot_location(event, slot),
     )
+    custom = _custom_message(event, 'cancellation')
+    custom_html = f"<p>{_esc(custom)}</p>" if custom else ''
     html_body = (
+        f"{custom_html}"
         f"<p>Your booking for <strong>{_esc(event['name'])}</strong> has been cancelled.</p>"
         f"<p>This should also clear the event from your calendar.</p>"
     )
@@ -668,6 +739,10 @@ def get_event(event_id):
     event = _row_to_dict(db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone())
     if not event:
         return jsonify({'error': 'not found'}), 404
+    try:
+        event['custom_messages'] = json.loads(event.get('custom_messages') or '{}')
+    except (ValueError, TypeError):
+        event['custom_messages'] = {}
     return jsonify({'event': event})
 
 
@@ -740,6 +815,23 @@ def update_event(event_id):
 
     if 'max_bookings_per_email' in body:
         fields['max_bookings_per_email'] = body['max_bookings_per_email']
+
+    if 'custom_messages' in body:
+        msgs = body['custom_messages']
+        if not isinstance(msgs, dict):
+            return jsonify({'error': 'custom_messages must be an object'}), 400
+        cleaned = {}
+        for k, v in msgs.items():
+            if k not in VALID_MESSAGE_TYPES:
+                return jsonify({'error': f'custom_messages keys must be one of {VALID_MESSAGE_TYPES}'}), 400
+            if v is None:
+                continue
+            if not isinstance(v, str):
+                return jsonify({'error': f'custom_messages.{k} must be a string'}), 400
+            v = v.strip()
+            if v:
+                cleaned[k] = v
+        fields['custom_messages'] = json.dumps(cleaned)
 
     if not fields:
         return jsonify({'error': 'no valid fields to update'}), 400
@@ -1196,6 +1288,224 @@ def list_bookings(event_id):
     return jsonify({'bookings': out})
 
 
+# ── Bookings export — CSV + PDF ──────────────────────────────────────────────
+# Both exporters read from the same field registry so adding a field later
+# (e.g. exposing a custom form-field answer on the PDF) is a one-line flag
+# flip here, not new plumbing in two places.
+
+def _fmt_slot_time(row):
+    start = datetime.fromisoformat(row['start_time'])
+    end = datetime.fromisoformat(row['end_time'])
+    return f"{start.strftime('%a, %b %-d, %Y %-I:%M %p')} – {end.strftime('%-I:%M %p')}"
+
+
+# Each entry: id, label, value(row, event) -> str, and whether it belongs
+# in the CSV / PDF export. `row` here is a joined booking+slot dict (as
+# returned by the query below) — NOT the raw bookings table row.
+BOOKING_EXPORT_FIELDS = [
+    {'id': 'name',     'label': 'Name',     'value': lambda row, event: row['name'],
+     'in_csv': True, 'in_pdf': True},
+    {'id': 'email',    'label': 'Email',    'value': lambda row, event: row['email'],
+     'in_csv': True, 'in_pdf': False},
+    {'id': 'slot_time','label': 'Time',     'value': lambda row, event: _fmt_slot_time(row),
+     'in_csv': True, 'in_pdf': True},
+    {'id': 'location', 'label': 'Location', 'value': lambda row, event: (row['location_override'] or event['location'] or ''),
+     'in_csv': True, 'in_pdf': True},
+    {'id': 'status',   'label': 'Status',   'value': lambda row, event: row['status'],
+     'in_csv': True, 'in_pdf': False},
+]
+
+
+def _export_bookings_query(db, event_id):
+    """Bookings joined with slot fields the registry needs, excluding
+    cancelled bookings — cancelled rows are noise in an export meant to
+    tell a producer or a client who's actually showing up."""
+    rows = db.execute("""
+        SELECT b.*, s.start_time, s.end_time, s.location_override
+        FROM bookings b
+        JOIN slots s ON s.id = b.slot_id
+        WHERE s.event_id = ? AND b.status != 'cancelled'
+        ORDER BY s.start_time ASC
+    """, (event_id,)).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def _export_form_fields(db, event_id):
+    """Custom form fields become extra CSV columns dynamically — every
+    event has a different set, so these can't live in the static registry
+    above. Not included on the PDF by default (in_pdf=False) — flip that
+    per-field here if a future event needs one surfaced there."""
+    rows = db.execute(
+        "SELECT * FROM form_fields WHERE event_id = ? ORDER BY sort_order ASC, id ASC", (event_id,)
+    ).fetchall()
+    out = []
+    for f in rows:
+        field_id = str(f['id'])
+        out.append({
+            'id': f'custom_{field_id}',
+            'label': f['label'],
+            'value': (lambda row, event, fid=field_id: (
+                json.loads(row['custom_field_answers'] or '{}').get(fid, '')
+            )),
+            'in_csv': True,
+            'in_pdf': False,
+        })
+    return out
+
+
+@app.route('/api/events/<int:event_id>/export/csv')
+@require_auth
+def export_bookings_csv(event_id):
+    db = get_db()
+    event = db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not event:
+        return jsonify({'error': 'not found'}), 404
+
+    fields = [f for f in BOOKING_EXPORT_FIELDS if f['in_csv']] + \
+        [f for f in _export_form_fields(db, event_id) if f['in_csv']]
+    rows = _export_bookings_query(db, event_id)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([f['label'] for f in fields])
+    for row in rows:
+        writer.writerow([f['value'](row, event) for f in fields])
+
+    filename = f"{event['slug']}-bookings.csv"
+    return Response(
+        buf.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
+
+def _draw_pdf_footer(c, page_num):
+    c.setFont('Helvetica', 8)
+    c.setFillColor(colors.HexColor('#8A8A8A'))
+    c.drawString(0.75 * inch, 0.5 * inch, f"Generated {datetime.now().strftime('%B %-d, %Y')}")
+    c.drawRightString(letter[0] - 0.75 * inch, 0.5 * inch, f"Page {page_num}")
+
+
+def _draw_pdf_section(c, y, title, rows, event, fields, accent_hex, page_num=1):
+    """Draws one section (Confirmed or Waitlist) starting at height y,
+    returns (new_y, final_page_num). Caller skips calling this at all when
+    a section has no rows — the PDF simply omits it rather than showing an
+    empty heading with nothing underneath. page_num is passed in (not
+    reset to 1) so a page break inside the Waitlist section continues
+    numbering from wherever the Confirmed section left off."""
+    page_w, page_h = letter
+    margin = 0.75 * inch
+    col_x = [margin, margin + 2.3 * inch, margin + 4.3 * inch]
+    row_h = 0.28 * inch
+
+    c.setFont('Helvetica-Bold', 11)
+    c.setFillColor(colors.HexColor(accent_hex))
+    c.drawString(margin, y, title.upper())
+    y -= 6
+    c.setStrokeColor(colors.HexColor(accent_hex))
+    c.setLineWidth(1)
+    c.line(margin, y, page_w - margin, y)
+    y -= 20
+
+    c.setFont('Helvetica-Bold', 9)
+    c.setFillColor(colors.HexColor('#1a1a1a'))
+    for label, x in zip(('Name', 'Time', 'Location'), col_x):
+        c.drawString(x, y, label.upper())
+    y -= 4
+    c.setStrokeColor(colors.HexColor('#DADADA'))
+    c.setLineWidth(0.5)
+    c.line(margin, y, page_w - margin, y)
+    y -= 16
+
+    field_by_id = {f['id']: f for f in fields}
+    shaded = False
+    for row in rows:
+        if y < 1 * inch:
+            _draw_pdf_footer(c, page_num)
+            c.showPage()
+            page_num += 1
+            y = page_h - 1 * inch
+
+        if shaded:
+            c.setFillColor(colors.HexColor('#F5F5F5'))
+            c.rect(margin - 4, y - 6, (page_w - 2 * margin) + 8, row_h, fill=1, stroke=0)
+        shaded = not shaded
+
+        c.setFont('Helvetica', 9.5)
+        c.setFillColor(colors.HexColor('#1a1a1a'))
+        c.drawString(col_x[0], y, field_by_id['name']['value'](row, event)[:40])
+        c.drawString(col_x[1], y, field_by_id['slot_time']['value'](row, event))
+        c.drawString(col_x[2], y, (field_by_id['location']['value'](row, event) or '—')[:32])
+        y -= row_h
+
+    return y - 14, page_num
+
+
+@app.route('/api/events/<int:event_id>/export/pdf')
+@require_auth
+def export_bookings_pdf(event_id):
+    db = get_db()
+    event = db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not event:
+        return jsonify({'error': 'not found'}), 404
+
+    fields = BOOKING_EXPORT_FIELDS
+    rows = _export_bookings_query(db, event_id)
+    confirmed = [r for r in rows if r['status'] == 'confirmed']
+    waitlisted = [r for r in rows if r['status'] == 'waitlisted']
+
+    buf = io.BytesIO()
+    c = pdf_canvas.Canvas(buf, pagesize=letter)
+    page_w, page_h = letter
+    margin = 0.75 * inch
+    accent = '#00B3B2'
+
+    # Header — white background (print-friendly, not the app's dark theme),
+    # teal used only as a thin accent rule, never a filled block, so it
+    # holds up on B&W/laser printers too. Job number intentionally omitted.
+    y = page_h - 1 * inch
+    c.setFont('Helvetica-Bold', 20)
+    c.setFillColor(colors.HexColor('#1a1a1a'))
+    c.drawString(margin, y, event['name'])
+    y -= 20
+    if event['location']:
+        c.setFont('Helvetica', 10)
+        c.setFillColor(colors.HexColor('#5E6E7E'))
+        c.drawString(margin, y, event['location'])
+        y -= 10
+    y -= 6
+    c.setStrokeColor(colors.HexColor(accent))
+    c.setLineWidth(2)
+    c.line(margin, y, page_w - margin, y)
+    y -= 34
+
+    page_num = 1
+    if confirmed:
+        y, page_num = _draw_pdf_section(c, y, 'Confirmed', confirmed, event, fields, accent, page_num=page_num)
+    if waitlisted:
+        if y < 1.5 * inch:
+            _draw_pdf_footer(c, page_num)
+            c.showPage()
+            page_num += 1
+            y = page_h - 1 * inch
+        y, page_num = _draw_pdf_section(c, y, 'Waitlist', waitlisted, event, fields, '#5E6E7E', page_num=page_num)
+    if not confirmed and not waitlisted:
+        c.setFont('Helvetica', 11)
+        c.setFillColor(colors.HexColor('#5E6E7E'))
+        c.drawString(margin, y, 'No bookings yet.')
+
+    _draw_pdf_footer(c, page_num)
+    c.save()
+    buf.seek(0)
+
+    filename = f"{event['slug']}-schedule.pdf"
+    return Response(
+        buf.getvalue(),
+        mimetype='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
+
 @app.route('/api/bookings/<int:booking_id>/promote', methods=['POST'])
 @require_auth
 def promote_booking(booking_id):
@@ -1226,9 +1536,13 @@ def promote_booking(booking_id):
     db.commit()
 
     cancel_url = f"/book/{event['slug']}/cancel/{booking['cancel_token']}"
+    reschedule_url = (
+        f"/book/{event['slug']}/reschedule/{booking['reschedule_token']}"
+        if event['allow_reschedule'] else None
+    )
     send_booking_invite(
         booking_id=booking['id'], name=booking['name'], email=booking['email'],
-        event=event, slot=slot, cancel_url=cancel_url,
+        event=event, slot=slot, cancel_url=cancel_url, reschedule_url=reschedule_url,
     )
     return jsonify({'promoted': True})
 
@@ -1504,10 +1818,10 @@ def public_create_booking(slug):
     if status == 'confirmed':
         send_booking_invite(
             booking_id=cur.lastrowid, name=name, email=email,
-            event=event, slot=slot, cancel_url=cancel_url,
+            event=event, slot=slot, cancel_url=cancel_url, reschedule_url=reschedule_url,
         )
     else:
-        send_email(email, "You're on the waitlist", f"Waitlisted for {event['name']}. Manage: {cancel_url}")
+        send_booking_waitlist(name=name, email=email, event=event, cancel_url=cancel_url)
 
     return jsonify({
         'booking': {
