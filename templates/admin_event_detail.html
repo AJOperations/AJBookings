@@ -288,6 +288,7 @@
                 <div style="display:flex; gap:8px;">
                     <a class="aj-btn aj-btn-ghost" id="export-csv-btn" href="#"><i class="ti ti-file-spreadsheet"></i> Export CSV</a>
                     <a class="aj-btn aj-btn-ghost" id="export-pdf-btn" href="#"><i class="ti ti-file-type-pdf"></i> Export PDF</a>
+                    <button class="aj-btn aj-btn-danger" id="clear-bookings-btn">Clear All</button>
                 </div>
             </div>
             <table class="bk-table">
@@ -315,6 +316,7 @@
             document.getElementById('save-messages-btn').addEventListener('click', saveMessages);
             document.getElementById('export-csv-btn').href = `/api/events/${EVENT_ID}/export/csv`;
             document.getElementById('export-pdf-btn').href = `/api/events/${EVENT_ID}/export/pdf`;
+            document.getElementById('clear-bookings-btn').addEventListener('click', clearBookings);
             document.getElementById('generate-slots-btn').addEventListener('click', generateSlots);
             document.getElementById('add-slot-btn').addEventListener('click', addManualSlot);
             document.getElementById('add-field-btn').addEventListener('click', addFormField);
@@ -816,10 +818,30 @@
                     <td>${esc(b.email)}</td>
                     <td>${fmtDateTime(b.start_time)}</td>
                     <td>${esc(b.status)}</td>
-                    <td style="text-align:right;">${promoteBtn}</td>
+                    <td style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">${promoteBtn}<button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteBooking(${b.id})">Delete</button></td>
                 `;
                 tbody.appendChild(tr);
             });
+        }
+
+        async function deleteBooking(id) {
+            if (!confirm('Delete this booking? No cancellation email is sent — this is a silent removal, not a cancel.')) return;
+            const res = await fetch(`/api/bookings/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not delete booking', 'error'); return; }
+            showToast('Booking deleted', 'success');
+            loadBookings();
+            loadSlots();
+        }
+
+        async function clearBookings() {
+            if (!confirm('Delete ALL bookings for this event? No cancellation emails are sent, and this cannot be undone.')) return;
+            const res = await fetch(`/api/events/${EVENT_ID}/bookings`, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Could not clear bookings', 'error'); return; }
+            showToast(`${data.count} booking(s) deleted`, 'success');
+            loadBookings();
+            loadSlots();
         }
 
         async function promoteBooking(id) {

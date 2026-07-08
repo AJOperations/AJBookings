@@ -1595,9 +1595,41 @@ def promote_booking(booking_id):
     return jsonify({'promoted': True})
 
 
-@app.route('/api/admin/test-invite', methods=['POST'])
+@app.route('/api/bookings/<int:booking_id>', methods=['DELETE'])
 @require_auth
-def admin_test_invite():
+def delete_booking(booking_id):
+    """Hard delete — no cancellation email, no ICS CANCEL sent. This is
+    distinct from the public cancel flow (which soft-cancels and notifies
+    the client); this route is for admin cleanup of junk/test/duplicate
+    bookings, where the person doesn't expect or want an email at all.
+    If a real client booking needs to be removed *with* notification, use
+    the existing cancel flow instead — don't repurpose this route for that."""
+    db = get_db()
+    booking = db.execute("SELECT id FROM bookings WHERE id = ?", (booking_id,)).fetchone()
+    if not booking:
+        return jsonify({'error': 'not found'}), 404
+    db.execute("DELETE FROM bookings WHERE id = ?", (booking_id,))
+    db.commit()
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/events/<int:event_id>/bookings', methods=['DELETE'])
+@require_auth
+def clear_bookings(event_id):
+    """Hard delete every booking for this event — no cancellation emails
+    sent for any of them. Same silent-cleanup rationale as delete_booking()
+    above, just scoped to the whole event at once."""
+    db = get_db()
+    event = db.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
+    if not event:
+        return jsonify({'error': 'not found'}), 404
+    cur = db.execute("""
+        DELETE FROM bookings WHERE id IN (
+            SELECT b.id FROM bookings b JOIN slots s ON s.id = b.slot_id WHERE s.event_id = ?
+        )
+    """, (event_id,))
+    db.commit()
+    return jsonify({'deleted': True, 'count': cur.rowcount})
     """
     Sends a real invite or cancel through the exact same send_email() /
     ics_builder path a live booking uses — the only thing synthetic is the
