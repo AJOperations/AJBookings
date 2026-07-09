@@ -612,7 +612,13 @@ def send_booking_waitlist(*, name, email, event, cancel_url):
 def send_booking_cancel(*, booking_id, name, email, event, slot):
     """Sends the cancellation email with a METHOD:CANCEL calendar invite for
     the same UID as the original booking invite, so an accepted invite gets
-    pulled off the recipient's calendar rather than left orphaned."""
+    pulled off the recipient's calendar rather than left orphaned.
+
+    Also fires for a reschedule-release (see public_reschedule_release) —
+    same email either way, which is exactly why the "pick a new time" link
+    matters here: on a real cancellation it's an option, on a reschedule
+    it's the whole point.
+    """
     ics_bytes = ics_builder.build_cancel_ics(
         uid=ics_builder.booking_uid(booking_id),
         summary=event['name'],
@@ -624,10 +630,12 @@ def send_booking_cancel(*, booking_id, name, email, event, slot):
     )
     custom = _custom_message(event, 'cancellation')
     custom_html = f"<p>{_esc(custom)}</p>" if custom else ''
+    book_again_url = f"{BOOKINGS_BASE_URL}/book/{event['slug']}"
     html_body = (
         f"{custom_html}"
         f"<p>Your booking for <strong>{_esc(event['name'])}</strong> has been cancelled.</p>"
         f"<p>This should also clear the event from your calendar.</p>"
+        f'<p><a href="{book_again_url}">Pick a new time</a></p>'
     )
     return send_email(
         email, f"Cancelled — {event['name']}", html_body,
@@ -1953,6 +1961,7 @@ def public_create_booking(slug):
             'status': status,
             'cancel_url': cancel_url,
             'reschedule_url': reschedule_url,
+            'message': _custom_message(event, 'waitlist' if status == 'waitlisted' else 'confirmation'),
         }
     }), 201
 

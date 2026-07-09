@@ -111,6 +111,22 @@
         .checkbox-row label { padding: 15px 0; cursor: pointer; }
         .confirm-screen { text-align: center; padding: 40px 0; }
         .confirm-screen h2 { font-size: 20px; }
+        .confirm-message {
+            background: #fff4e5; border: 1px solid #f0c98a; border-radius: 8px;
+            padding: 12px 16px; font-size: 14px; text-align: left;
+            max-width: 420px; margin: 20px auto 0;
+        }
+        .confirm-details {
+            text-align: left; max-width: 420px; margin: 24px auto 0;
+            background: #fff; border: 1px solid #e2e2e4; border-radius: 10px; padding: 4px 16px;
+        }
+        .detail-row {
+            display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+            padding: 10px 0; border-bottom: 1px solid #eee; font-size: 14px;
+        }
+        .detail-row:last-child { border-bottom: none; }
+        .detail-label { color: #888; font-weight: 600; flex-shrink: 0; }
+        .detail-value { color: #1a1a1a; text-align: right; word-break: break-word; }
         .confirm-links { margin-top: 24px; font-size: 14px; display: flex; justify-content: center; gap: 4px; }
         .confirm-links a {
             display: inline-flex; align-items: center; justify-content: center;
@@ -401,6 +417,8 @@
             });
             if (missingRequired) { errEl.textContent = 'Please fill in all required fields.'; return; }
 
+            STATE.lastSubmission = { name, email, answers };
+
             const res = await fetch(`/api/public/events/${SLUG}/bookings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -414,11 +432,53 @@
 
         function renderConfirmation(booking) {
             const isWaitlist = booking.status === 'waitlisted';
+            const sub = STATE.lastSubmission || { name: '', email: '', answers: {} };
+            const slot = STATE.selectedSlot;
+
+            const whenLine = slot
+                ? `${fmtDayHeading(new Date(slot.start_time))} · ${fmtTime(slot.start_time)}–${fmtTime(slot.end_time)}`
+                : '';
+            const location = (slot && slot.location_override) ? slot.location_override : (EVENT.location || '');
+
+            let fieldRows = '';
+            FIELDS.forEach(f => {
+                const raw = sub.answers[String(f.id)];
+                const display = f.field_type === 'checkbox'
+                    ? (raw ? 'Yes' : 'No')
+                    : ((raw && String(raw).trim()) ? raw : '—');
+                fieldRows += `
+                    <div class="detail-row">
+                        <span class="detail-label">${esc(f.label)}</span>
+                        <span class="detail-value">${esc(display)}</span>
+                    </div>`;
+            });
+
             document.getElementById('header-block')?.remove();
             document.getElementById('content').innerHTML = `
                 <div class="confirm-screen">
                     <h2>${isWaitlist ? "You're on the waitlist" : "You're confirmed"}</h2>
                     <p class="meta" style="justify-content:center;">${esc(EVENT.name)}</p>
+                    ${booking.message ? `<p class="confirm-message">${esc(booking.message)}</p>` : ''}
+                    <div class="confirm-details">
+                        <div class="detail-row">
+                            <span class="detail-label">Name</span>
+                            <span class="detail-value">${esc(sub.name)}</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Email</span>
+                            <span class="detail-value">${esc(sub.email)}</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Time</span>
+                            <span class="detail-value">${esc(whenLine)}</span>
+                        </div>
+                        ${location ? `
+                        <div class="detail-row">
+                            <span class="detail-label">Location</span>
+                            <span class="detail-value">${esc(location)}</span>
+                        </div>` : ''}
+                        ${fieldRows}
+                    </div>
                     <div class="confirm-links">
                         <a href="${booking.cancel_url}">Cancel</a>
                         ${booking.reschedule_url ? `<a href="${booking.reschedule_url}">Reschedule</a>` : ''}
