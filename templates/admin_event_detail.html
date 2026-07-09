@@ -7,7 +7,7 @@
     <link rel="icon" type="image/png" href="https://aj-hq.up.railway.app/static/AJ_FavIcon.png">
     <link rel="stylesheet" href="https://aj-hq.up.railway.app/static/aj-theme.css?v=1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
-    <link rel="stylesheet" href="/static/main.css?v=1">
+    <link rel="stylesheet" href="/static/main.css?v=2">
     <script src="https://aj-hq.up.railway.app/static/aj-utils.js"></script>
 </head>
 <body>
@@ -238,12 +238,14 @@
         <!-- Slots table -->
         <div class="aj-card bk-card">
             <h2>Slots</h2>
-            <table class="bk-table">
-                <thead>
-                    <tr><th>Start</th><th>End</th><th>Capacity</th><th>Confirmed</th><th>Waitlisted</th><th>Source</th><th></th></tr>
-                </thead>
-                <tbody id="slots-tbody"></tbody>
-            </table>
+            <div class="bk-table-scroll">
+                <table class="bk-table">
+                    <thead>
+                        <tr><th>Start</th><th>End</th><th>Capacity</th><th>Confirmed</th><th>Waitlisted</th><th>Source</th><th></th></tr>
+                    </thead>
+                    <tbody id="slots-tbody"></tbody>
+                </table>
+            </div>
             <div class="bk-empty-state bk-hidden" id="slots-empty">No slots yet — generate a cadence or add one manually above.</div>
         </div>
 
@@ -274,10 +276,12 @@
             </div>
             <button class="aj-btn aj-btn-primary" id="add-field-btn" style="margin-top:4px;">Add Field</button>
 
-            <table class="bk-table" style="margin-top:16px;">
-                <thead><tr><th>Label</th><th>Type</th><th>Required</th><th></th></tr></thead>
-                <tbody id="fields-tbody"></tbody>
-            </table>
+            <div class="bk-table-scroll">
+                <table class="bk-table" style="margin-top:16px;">
+                    <thead><tr><th>Label</th><th>Type</th><th>Required</th><th></th></tr></thead>
+                    <tbody id="fields-tbody"></tbody>
+                </table>
+            </div>
             <div class="bk-empty-state bk-hidden" id="fields-empty">No custom fields yet — name and email are always collected.</div>
         </div>
 
@@ -291,10 +295,12 @@
                     <button class="aj-btn aj-btn-danger" id="clear-bookings-btn">Clear All</button>
                 </div>
             </div>
-            <table class="bk-table">
-                <thead><tr><th>Name</th><th>Email</th><th>Slot</th><th>Status</th><th></th></tr></thead>
-                <tbody id="bookings-tbody"></tbody>
-            </table>
+            <div class="bk-table-scroll">
+                <table class="bk-table">
+                    <thead><tr><th>Name</th><th>Email</th><th>Slot</th><th>Status</th><th></th></tr></thead>
+                    <tbody id="bookings-tbody"></tbody>
+                </table>
+            </div>
             <div class="bk-empty-state bk-hidden" id="bookings-empty">No bookings yet.</div>
         </div>
     </main>

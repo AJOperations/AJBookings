@@ -7,7 +7,7 @@
     <link rel="icon" type="image/png" href="https://aj-hq.up.railway.app/static/AJ_FavIcon.png">
     <link rel="stylesheet" href="https://aj-hq.up.railway.app/static/aj-theme.css?v=1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
-    <link rel="stylesheet" href="/static/main.css?v=1">
+    <link rel="stylesheet" href="/static/main.css?v=2">
     <script src="https://aj-hq.up.railway.app/static/aj-utils.js"></script>
 </head>
 <body>
@@ -75,20 +75,22 @@
         </div>
 
         <div class="aj-card bk-card">
-            <table class="bk-table">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Job #</th>
-                        <th>Status</th>
-                        <th>Slots</th>
-                        <th>Bookings</th>
-                        <th>Owner</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody id="events-tbody"></tbody>
-            </table>
+            <div class="bk-table-scroll">
+                <table class="bk-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Job #</th>
+                            <th>Status</th>
+                            <th>Slots</th>
+                            <th>Bookings</th>
+                            <th>Owner</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-tbody"></tbody>
+                </table>
+            </div>
             <div class="bk-empty-state bk-hidden" id="events-empty">No events yet — create your first one above.</div>
         </div>
     </main>
