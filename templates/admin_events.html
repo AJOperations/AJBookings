@@ -94,6 +94,28 @@
     </main>
 
     <script>
+        // ── Tap-twice inline confirm ────────────────────────────────────────
+        // window.confirm() is banned per standards (bad on mobile, blocked in
+        // some HTTPS contexts). First click arms the button and shows a
+        // confirm label; a second click within the window fires the action.
+        // Auto-resets after 3.5s if there's no second click.
+        function armDelete(btn, confirmLabel, action) {
+            if (btn.dataset.armed === 'true') {
+                clearTimeout(btn._armTimer);
+                btn.dataset.armed = 'false';
+                btn.textContent = btn.dataset.origLabel;
+                action();
+                return;
+            }
+            btn.dataset.origLabel = btn.dataset.origLabel || btn.textContent;
+            btn.dataset.armed = 'true';
+            btn.textContent = confirmLabel;
+            btn._armTimer = setTimeout(() => {
+                btn.dataset.armed = 'false';
+                btn.textContent = btn.dataset.origLabel;
+            }, 3500);
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             ajInitHeader({ toolName: 'Bookings' });
             loadEvents();
@@ -231,14 +253,15 @@
         }
 
         async function deleteEvent(id, btn) {
-            if (!confirm('Delete this event? This cannot be undone.')) return;
-            const res = await fetch(`/api/events/${id}`, { method: 'DELETE' });
-            const data = await res.json();
-            if (!res.ok) {
-                showToast(data.error || 'Could not delete event', 'error');
-                return;
-            }
-            loadEvents();
+            armDelete(btn, 'Confirm delete?', async () => {
+                const res = await fetch(`/api/events/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) {
+                    showToast(data.error || 'Could not delete event', 'error');
+                    return;
+                }
+                loadEvents();
+            });
         }
     </script>
 </body>

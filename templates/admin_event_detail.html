@@ -303,6 +303,28 @@
         const EVENT_ID = {{ event_id }};
         let selectedDays = new Set();
 
+        // ── Tap-twice inline confirm ────────────────────────────────────────
+        // window.confirm() is banned per standards (bad on mobile, blocked in
+        // some HTTPS contexts). First click arms the button and shows a
+        // confirm label; a second click within the window fires the action.
+        // Auto-resets after 3.5s if there's no second click.
+        function armDelete(btn, confirmLabel, action) {
+            if (btn.dataset.armed === 'true') {
+                clearTimeout(btn._armTimer);
+                btn.dataset.armed = 'false';
+                btn.textContent = btn.dataset.origLabel;
+                action();
+                return;
+            }
+            btn.dataset.origLabel = btn.dataset.origLabel || btn.textContent;
+            btn.dataset.armed = 'true';
+            btn.textContent = confirmLabel;
+            btn._armTimer = setTimeout(() => {
+                btn.dataset.armed = 'false';
+                btn.textContent = btn.dataset.origLabel;
+            }, 3500);
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             ajInitHeader({ toolName: 'Bookings' });
             loadEvent(true);
@@ -316,7 +338,7 @@
             document.getElementById('save-messages-btn').addEventListener('click', saveMessages);
             document.getElementById('export-csv-btn').href = `/api/events/${EVENT_ID}/export/csv`;
             document.getElementById('export-pdf-btn').href = `/api/events/${EVENT_ID}/export/pdf`;
-            document.getElementById('clear-bookings-btn').addEventListener('click', clearBookings);
+            document.getElementById('clear-bookings-btn').addEventListener('click', function () { clearBookings(this); });
             document.getElementById('generate-slots-btn').addEventListener('click', generateSlots);
             document.getElementById('add-slot-btn').addEventListener('click', addManualSlot);
             document.getElementById('add-field-btn').addEventListener('click', addFormField);
@@ -633,7 +655,10 @@
                     const days = r.days_of_week.map(d => ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d]).join(', ');
                     return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:0.5px solid var(--border2); font-size:13px;">
                         <span>${r.start_date} → ${r.end_date} · ${days} · ${r.start_time}–${r.end_time} · ${r.slot_length_minutes}min · cap ${r.capacity} · <strong>${r.slots_generated} slots</strong></span>
-                        <button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteSlotRule(${r.id})">Delete Rule</button>
+                        <span style="display:flex; gap:6px;">
+                            <button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteSlotRule(${r.id}, this, false)">Delete Rule</button>
+                            <button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteSlotRule(${r.id}, this, true)">Delete Rule + Slots</button>
+                        </span>
                     </div>`;
                 }).join('');
         }
@@ -667,14 +692,16 @@
             loadSlots();
         }
 
-        async function deleteSlotRule(ruleId) {
-            const cascade = confirm('Also delete the slots this rule generated (only those with no active bookings)? Cancel = keep slots, just remove the rule.');
-            const res = await fetch(`/api/slot-rules/${ruleId}?cascade=${cascade}`, { method: 'DELETE' });
-            const data = await res.json();
-            if (!res.ok) { showToast(data.error || 'Could not delete rule', 'error'); return; }
-            showToast(`Rule deleted${data.slots_removed ? ' · ' + data.slots_removed + ' slots removed' : ''}`, 'success');
-            loadSlotRules();
-            loadSlots();
+        async function deleteSlotRule(ruleId, btn, cascade) {
+            const label = cascade ? 'Confirm — deletes slots too?' : 'Confirm delete rule?';
+            armDelete(btn, label, async () => {
+                const res = await fetch(`/api/slot-rules/${ruleId}?cascade=${cascade}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.error || 'Could not delete rule', 'error'); return; }
+                showToast(`Rule deleted${data.slots_removed ? ' · ' + data.slots_removed + ' slots removed' : ''}`, 'success');
+                loadSlotRules();
+                loadSlots();
+            });
         }
 
         // ── Slots ───────────────────────────────────────────────────────────
@@ -700,7 +727,7 @@
                     <td>${s.confirmed_count}</td>
                     <td>${s.waitlisted_count}</td>
                     <td><span class="bk-source-tag">${s.source}</span></td>
-                    <td style="text-align:right;"><button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteSlot(${s.id})">Delete</button></td>
+                    <td style="text-align:right;"><button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteSlot(${s.id}, this)">Delete</button></td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -727,12 +754,13 @@
             loadSlots();
         }
 
-        async function deleteSlot(id) {
-            if (!confirm('Delete this slot?')) return;
-            const res = await fetch(`/api/slots/${id}`, { method: 'DELETE' });
-            const data = await res.json();
-            if (!res.ok) { showToast(data.error || 'Could not delete slot', 'error'); return; }
-            loadSlots();
+        async function deleteSlot(id, btn) {
+            armDelete(btn, 'Confirm delete?', async () => {
+                const res = await fetch(`/api/slots/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.error || 'Could not delete slot', 'error'); return; }
+                loadSlots();
+            });
         }
 
         // ── Form fields ─────────────────────────────────────────────────────
@@ -755,7 +783,7 @@
                     <td>${esc(f.label)}</td>
                     <td>${esc(f.field_type)}</td>
                     <td>${f.required ? 'Yes' : 'No'}</td>
-                    <td style="text-align:right;"><button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteFormField(${f.id})">Delete</button></td>
+                    <td style="text-align:right;"><button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteFormField(${f.id}, this)">Delete</button></td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -786,12 +814,13 @@
             loadFormFields();
         }
 
-        async function deleteFormField(id) {
-            if (!confirm('Delete this field?')) return;
-            const res = await fetch(`/api/form-fields/${id}`, { method: 'DELETE' });
-            const data = await res.json();
-            if (!res.ok) { showToast(data.error || 'Could not delete field', 'error'); return; }
-            loadFormFields();
+        async function deleteFormField(id, btn) {
+            armDelete(btn, 'Confirm delete?', async () => {
+                const res = await fetch(`/api/form-fields/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.error || 'Could not delete field', 'error'); return; }
+                loadFormFields();
+            });
         }
 
         // ── Bookings ────────────────────────────────────────────────────────
@@ -818,30 +847,32 @@
                     <td>${esc(b.email)}</td>
                     <td>${fmtDateTime(b.start_time)}</td>
                     <td>${esc(b.status)}</td>
-                    <td style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">${promoteBtn}<button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteBooking(${b.id})">Delete</button></td>
+                    <td style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">${promoteBtn}<button class="aj-btn aj-btn-danger aj-btn-sm" onclick="deleteBooking(${b.id}, this)">Delete</button></td>
                 `;
                 tbody.appendChild(tr);
             });
         }
 
-        async function deleteBooking(id) {
-            if (!confirm('Delete this booking? No cancellation email is sent — this is a silent removal, not a cancel.')) return;
-            const res = await fetch(`/api/bookings/${id}`, { method: 'DELETE' });
-            const data = await res.json();
-            if (!res.ok) { showToast(data.error || 'Could not delete booking', 'error'); return; }
-            showToast('Booking deleted', 'success');
-            loadBookings();
-            loadSlots();
+        async function deleteBooking(id, btn) {
+            armDelete(btn, 'Confirm delete? (silent)', async () => {
+                const res = await fetch(`/api/bookings/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.error || 'Could not delete booking', 'error'); return; }
+                showToast('Booking deleted', 'success');
+                loadBookings();
+                loadSlots();
+            });
         }
 
-        async function clearBookings() {
-            if (!confirm('Delete ALL bookings for this event? No cancellation emails are sent, and this cannot be undone.')) return;
-            const res = await fetch(`/api/events/${EVENT_ID}/bookings`, { method: 'DELETE' });
-            const data = await res.json();
-            if (!res.ok) { showToast(data.error || 'Could not clear bookings', 'error'); return; }
-            showToast(`${data.count} booking(s) deleted`, 'success');
-            loadBookings();
-            loadSlots();
+        async function clearBookings(btn) {
+            armDelete(btn, 'Delete ALL? No emails sent', async () => {
+                const res = await fetch(`/api/events/${EVENT_ID}/bookings`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.error || 'Could not clear bookings', 'error'); return; }
+                showToast(`${data.count} booking(s) deleted`, 'success');
+                loadBookings();
+                loadSlots();
+            });
         }
 
         async function promoteBooking(id) {

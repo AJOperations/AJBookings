@@ -1720,7 +1720,10 @@ def _is_valid_email(val):
 
 @app.route('/book/<slug>')
 def public_booking_page(slug):
-    return render_template('public_booking.html', slug=slug)
+    # ?rescheduled=1 is the redirect landing from the reschedule-release POST
+    # (see public_reschedule_release) — drives the "pick a new time" banner.
+    reschedule_released = request.args.get('rescheduled') == '1'
+    return render_template('public_booking.html', slug=slug, reschedule_released=reschedule_released)
 
 
 @app.route('/book/<slug>/cancel/<token>')
@@ -1738,34 +1741,75 @@ def public_cancel_page(slug, token):
 
 
 @app.route('/book/<slug>/reschedule/<token>')
-def public_reschedule_action(slug, token):
+def public_reschedule_page(slug, token):
     """
-    Per spec: 'reschedule returns to the booking page pre-filtered to that
-    event' — implemented as: release the old slot (cancel that booking),
-    then redirect back to the booking page with a banner so they pick a
-    new time. If the event doesn't allow reschedule, nothing is released.
+    Read-only confirm page — mirrors public_cancel_page's pattern exactly.
+    Deliberately does NOT mutate anything on GET: this link goes out in an
+    email, and enterprise mail security (Outlook Safe Links, Mimecast,
+    Proofpoint, etc.) pre-fetches every URL in a message to scan it before
+    the recipient ever opens it. A GET that mutated (the old behavior) would
+    get silently consumed by that scan, burning the one-time token before
+    the person ever clicked — which is exactly what "the reschedule link is
+    broken" turned out to be. The actual release only happens via the POST
+    below, fired by an explicit button tap.
     """
     db = get_db()
     booking = db.execute("SELECT * FROM bookings WHERE reschedule_token = ?", (token,)).fetchone()
-    if not booking or booking['status'] == 'cancelled':
-        return render_template('public_booking.html', slug=slug, reschedule_error='invalid_token')
+
+    slot = None
+    event = None
+    if booking:
+        slot = db.execute("SELECT * FROM slots WHERE id = ?", (booking['slot_id'],)).fetchone()
+        event = db.execute("SELECT * FROM events WHERE id = ?", (slot['event_id'],)).fetchone() if slot else None
+
+    return render_template(
+        'public_reschedule.html',
+        slug=(event['slug'] if event else slug),
+        token=token,
+        booking_found=booking is not None,
+        already_released=(booking is not None and booking['status'] == 'cancelled'),
+        not_allowed=(event is not None and not event['allow_reschedule']),
+        event_name=(event['name'] if event else 'this event'),
+        brand_color=(event['brand_color'] if event and event['brand_color'] else '#1a1a1a'),
+        slot_start=(slot['start_time'] if slot else None),
+    )
+
+
+@app.route('/api/public/bookings/<token>/reschedule', methods=['POST'])
+def public_reschedule_release(token):
+    """
+    Does the actual release. Re-validates everything server-side rather than
+    trusting the GET page's earlier read — allow_reschedule could have been
+    toggled off between page load and button tap, and this is the only place
+    that's allowed to matter. The status-guarded UPDATE (WHERE status !=
+    'cancelled') makes this idempotent: a double-click, a retried request, or
+    the button somehow firing twice all land on the same outcome — one
+    release, one cancel email, not two — rather than relying on a
+    check-then-act pair that a race could slip through.
+    """
+    db = get_db()
+    booking = db.execute("SELECT * FROM bookings WHERE reschedule_token = ?", (token,)).fetchone()
+    if not booking:
+        return jsonify({'error': 'invalid_token'}), 404
 
     slot = db.execute("SELECT * FROM slots WHERE id = ?", (booking['slot_id'],)).fetchone()
-    event = db.execute("SELECT * FROM events WHERE id = ?", (slot['event_id'],)).fetchone()
-
-    if not event['allow_reschedule']:
-        return render_template('public_booking.html', slug=event['slug'], reschedule_error='not_allowed')
+    event = db.execute("SELECT * FROM events WHERE id = ?", (slot['event_id'],)).fetchone() if slot else None
+    if not event or not event['allow_reschedule']:
+        return jsonify({'error': 'not_allowed'}), 400
 
     was_confirmed = booking['status'] == 'confirmed'
-    db.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (booking['id'],))
+    cur = db.execute(
+        "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status != 'cancelled'",
+        (booking['id'],)
+    )
     db.commit()
 
-    if was_confirmed:
+    if cur.rowcount == 1 and was_confirmed:
         send_booking_cancel(
             booking_id=booking['id'], name=booking['name'], email=booking['email'],
             event=event, slot=slot,
         )
-    return render_template('public_booking.html', slug=event['slug'], reschedule_released=True)
+    return jsonify({'ok': True, 'redirect': f"/book/{event['slug']}?rescheduled=1"})
 
 
 # ── Public API — read ─────────────────────────────────────────────────────────
@@ -1919,12 +1963,16 @@ def public_cancel_booking(token):
     booking = db.execute("SELECT * FROM bookings WHERE cancel_token = ?", (token,)).fetchone()
     if not booking:
         return jsonify({'error': 'not found'}), 404
-    if booking['status'] == 'cancelled':
-        return jsonify({'error': 'already cancelled'}), 400
 
     was_confirmed = booking['status'] == 'confirmed'
-    db.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (booking['id'],))
+    cur = db.execute(
+        "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status != 'cancelled'",
+        (booking['id'],)
+    )
     db.commit()
+
+    if cur.rowcount == 0:
+        return jsonify({'error': 'already cancelled'}), 400
 
     if was_confirmed:
         slot = db.execute("SELECT * FROM slots WHERE id = ?", (booking['slot_id'],)).fetchone()

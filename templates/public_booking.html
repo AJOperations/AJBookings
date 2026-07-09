@@ -44,7 +44,6 @@
         }
         .directions strong { color: #1a1a1a; display: block; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
         .banner { background: #fff4e5; border: 1px solid #f0c98a; border-radius: 8px; padding: 12px 16px; font-size: 14px; margin: 20px 0; }
-        .banner.error { background: #fdecec; border-color: #e8a1a1; }
 
         button {
             font-family: inherit;
@@ -122,7 +121,6 @@
     <script>
         const SLUG = {{ slug | tojson }};
         const RESCHEDULE_RELEASED = {{ (reschedule_released | default(false)) | tojson }};
-        const RESCHEDULE_ERROR = {{ (reschedule_error | default(none)) | tojson }};
 
         let EVENT = null;
         let SLOTS = [];
@@ -169,10 +167,6 @@
             const area = document.getElementById('banner-area');
             if (RESCHEDULE_RELEASED) {
                 area.innerHTML = `<div class="banner">Your previous booking was released. Pick a new time below.</div>`;
-            } else if (RESCHEDULE_ERROR === 'invalid_token') {
-                area.innerHTML = `<div class="banner error">That reschedule link isn't valid.</div>`;
-            } else if (RESCHEDULE_ERROR === 'not_allowed') {
-                area.innerHTML = `<div class="banner error">Rescheduling isn't enabled for this event — please reach out directly.</div>`;
             }
         }
 

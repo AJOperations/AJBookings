@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reschedule Booking</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: #f7f7f8;
+            color: #1a1a1a;
+            margin: 0;
+            border-top: 4px solid {{ brand_color | default('#1a1a1a') }};
+        }
+        .wrap {
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 60px 20px;
+            text-align: center;
+        }
+        .event-name { color: #888; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+        h1 { font-size: 22px; margin-bottom: 12px; }
+        p { color: #555; font-size: 14px; line-height: 1.5; }
+        .slot-time { font-weight: 600; color: #1a1a1a; }
+        button {
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            cursor: pointer;
+            background: #c0392b;
+            color: #fff;
+            margin-top: 16px;
+        }
+        button:hover { background: #a93225; }
+        button:disabled { opacity: 0.6; cursor: default; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="event-name">{{ event_name }}</div>
+        {% if not booking_found %}
+            <h1>Link not valid</h1>
+            <p>This reschedule link doesn't match any booking. If you think this is a mistake, please reach out directly.</p>
+        {% elif already_released %}
+            <h1>Already released</h1>
+            <p>This booking has already been released — you're free to book a new time whenever you're ready.</p>
+            <p><a href="/book/{{ slug }}">Pick a time</a></p>
+        {% elif not_allowed %}
+            <h1>Rescheduling isn't available</h1>
+            <p>This event doesn't support self-service rescheduling — please reach out directly to change your time.</p>
+        {% else %}
+            <div id="confirm-area">
+                <h1>Reschedule this booking?</h1>
+                <p>This releases your current slot<span id="slot-time-line"></span> so you can pick a new time. This can't be undone.</p>
+                <button id="release-btn" onclick="doRelease()">Release My Slot</button>
+            </div>
+            <div id="error-area" style="color:#c0392b; font-size:13px; margin-top:12px;"></div>
+        {% endif %}
+    </div>
+
+    <script>
+        const TOKEN = {{ token | tojson }};
+        const SLOT_START = {{ (slot_start | default(none)) | tojson }};
+
+        if (SLOT_START) {
+            const d = new Date(SLOT_START);
+            const label = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+                + ' at ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+            const line = document.getElementById('slot-time-line');
+            if (line) line.textContent = ' (' + label + ')';
+        }
+
+        async function doRelease() {
+            const btn = document.getElementById('release-btn');
+            const errEl = document.getElementById('error-area');
+            errEl.textContent = '';
+            btn.disabled = true;
+            btn.textContent = 'Releasing…';
+
+            try {
+                const res = await fetch('/api/public/bookings/' + TOKEN + '/reschedule', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) {
+                    errEl.textContent = data.error === 'not_allowed'
+                        ? "Rescheduling isn't enabled for this event — please reach out directly."
+                        : (data.error || 'Something went wrong.');
+                    btn.disabled = false;
+                    btn.textContent = 'Release My Slot';
+                    return;
+                }
+                window.location.href = data.redirect;
+            } catch (e) {
+                errEl.textContent = 'Something went wrong — please try again.';
+                btn.disabled = false;
+                btn.textContent = 'Release My Slot';
+            }
+        }
+    </script>
+</body>
+</html>
