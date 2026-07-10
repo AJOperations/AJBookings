@@ -208,7 +208,26 @@
             return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
         }
         function fmtTime(iso) {
-            return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+            const d = new Date(iso);
+            // Slot times are naive (no offset) — the browser parses them as
+            // local time, and formatting with no explicit timeZone below is
+            // local time too, so this round-trips back to the exact stored
+            // wall-clock digits regardless of the visitor's own timezone.
+            // That's intentional: an event's time means the same thing to
+            // everyone, not "converted to wherever you are." What visitors
+            // from outside EVENT.timezone need is the label telling them
+            // which zone that wall-clock time is actually in.
+            const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+            if (!EVENT || !EVENT.timezone) return time;
+            try {
+                const parts = new Intl.DateTimeFormat('en-US', {
+                    timeZone: EVENT.timezone, timeZoneName: 'short',
+                }).formatToParts(d);
+                const abbr = parts.find(p => p.type === 'timeZoneName')?.value;
+                return abbr ? `${time} ${abbr}` : time;
+            } catch (e) {
+                return time;
+            }
         }
         function fmtDayHeading(d) {
             return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });

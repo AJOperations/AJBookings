@@ -76,7 +76,7 @@ DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 
 # Current schema version — MUST equal the highest `if current < N` migration
 # block below.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
 _HQ_TIMEOUT = 5
@@ -250,6 +250,18 @@ def init_db():
             # mean "no custom message for this type," not an error.
             db.execute("ALTER TABLE events ADD COLUMN custom_messages TEXT DEFAULT '{}'")
         current = 5
+
+    if current < 6:
+        cols = get_cols(db, 'events')
+        if 'timezone' not in cols:
+            # IANA zone the event's slot times are wall-clock in. Default
+            # matches ics_builder's long-standing hardcoded assumption, so
+            # every event created before this column existed keeps behaving
+            # exactly as it already did — nothing changes for them.
+            db.execute(
+                f"ALTER TABLE events ADD COLUMN timezone TEXT NOT NULL DEFAULT '{ics_builder.DEFAULT_TIMEZONE}'"
+            )
+        current = 6
 
     db.execute(
         "INSERT INTO schema_meta (id, version) VALUES (1, ?) "
@@ -571,6 +583,7 @@ def send_booking_invite(*, booking_id, name, email, event, slot, cancel_url, res
         attendee_name=name,
         location=_slot_location(event, slot),
         description=_invite_description(event, cancel_url, reschedule_url),
+        timezone=event['timezone'],
     )
     custom = _custom_message(event, 'confirmation')
     custom_html = f"<p>{_esc(custom)}</p>" if custom else ''
@@ -612,13 +625,7 @@ def send_booking_waitlist(*, name, email, event, cancel_url):
 def send_booking_cancel(*, booking_id, name, email, event, slot):
     """Sends the cancellation email with a METHOD:CANCEL calendar invite for
     the same UID as the original booking invite, so an accepted invite gets
-    pulled off the recipient's calendar rather than left orphaned.
-
-    Also fires for a reschedule-release (see public_reschedule_release) —
-    same email either way, which is exactly why the "pick a new time" link
-    matters here: on a real cancellation it's an option, on a reschedule
-    it's the whole point.
-    """
+    pulled off the recipient's calendar rather than left orphaned."""
     ics_bytes = ics_builder.build_cancel_ics(
         uid=ics_builder.booking_uid(booking_id),
         summary=event['name'],
@@ -627,15 +634,14 @@ def send_booking_cancel(*, booking_id, name, email, event, slot):
         attendee_email=email,
         attendee_name=name,
         location=_slot_location(event, slot),
+        timezone=event['timezone'],
     )
     custom = _custom_message(event, 'cancellation')
     custom_html = f"<p>{_esc(custom)}</p>" if custom else ''
-    book_again_url = f"{BOOKINGS_BASE_URL}/book/{event['slug']}"
     html_body = (
         f"{custom_html}"
         f"<p>Your booking for <strong>{_esc(event['name'])}</strong> has been cancelled.</p>"
         f"<p>This should also clear the event from your calendar.</p>"
-        f'<p><a href="{book_again_url}">Pick a new time</a></p>'
     )
     return send_email(
         email, f"Cancelled — {event['name']}", html_body,
@@ -710,11 +716,14 @@ def create_event():
     body = request.get_json(force=True, silent=True) or {}
     name = (body.get('name') or '').strip()
     job_number = (body.get('job_number') or '').strip()
+    timezone = body.get('timezone') or ics_builder.DEFAULT_TIMEZONE
 
     if not name:
         return jsonify({'error': 'name is required'}), 400
     if not is_valid_job_number(job_number):
         return jsonify({'error': 'job_number must be exactly 7 digits'}), 400
+    if timezone not in ics_builder.VALID_TIMEZONES:
+        return jsonify({'error': f'timezone must be one of {sorted(ics_builder.VALID_TIMEZONES)}'}), 400
 
     db = get_db()
     slug = _unique_slug(db, _slugify(name))
@@ -725,14 +734,15 @@ def create_event():
         INSERT INTO events
             (slug, name, job_number, owner_user_id, owner_name, status,
              location, notes, allow_waitlist, allow_reschedule,
-             max_bookings_per_email, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
+             max_bookings_per_email, timezone, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         slug, name, job_number, user_id, user_name,
         body.get('location'), body.get('notes'),
         1 if body.get('allow_waitlist') else 0,
         1 if body.get('allow_reschedule') else 0,
         body.get('max_bookings_per_email'),
+        timezone,
         now, now
     ))
     db.commit()
@@ -781,6 +791,12 @@ def update_event(event_id):
         if body['status'] not in VALID_EVENT_STATUSES:
             return jsonify({'error': f'status must be one of {VALID_EVENT_STATUSES}'}), 400
         fields['status'] = body['status']
+
+    if 'timezone' in body:
+        tz = body['timezone']
+        if tz not in ics_builder.VALID_TIMEZONES:
+            return jsonify({'error': f'timezone must be one of {sorted(ics_builder.VALID_TIMEZONES)}'}), 400
+        fields['timezone'] = tz
 
     for key in ('location', 'notes', 'directions'):
         if key in body:
@@ -1638,6 +1654,11 @@ def clear_bookings(event_id):
     """, (event_id,))
     db.commit()
     return jsonify({'deleted': True, 'count': cur.rowcount})
+
+
+@app.route('/api/admin/test-invite', methods=['POST'])
+@require_auth
+def send_test_invite():
     """
     Sends a real invite or cancel through the exact same send_email() /
     ics_builder path a live booking uses — the only thing synthetic is the
@@ -1648,6 +1669,12 @@ def clear_bookings(event_id):
     your calendar app, then send 'cancel' and confirm it disappears. That
     proves the REQUEST/CANCEL pairing works end to end — a single send
     only proves email delivery, not that the invite behaves like one.
+
+    Bug fix (2026-07-09): this handler previously had no route decorator —
+    it was stranded as unreachable code after clear_bookings()'s return
+    statement, so the admin panel's "Send Test Invite"/"Send Test Cancel"
+    buttons 404'd silently. Extracted into its own route, unchanged
+    otherwise.
     """
     user = get_current_user()
     body = request.get_json(force=True, silent=True) or {}
@@ -1676,6 +1703,7 @@ def clear_bookings(event_id):
         ics_bytes = ics_builder.build_cancel_ics(
             uid=uid, summary=f"[TEST] {event['name']}", start=test_start, end=test_end,
             attendee_email=to_email, attendee_name=to_name, location=location,
+            timezone=event['timezone'],
         )
         subject = f"[TEST] Cancelled — {event['name']}"
         html_body = (
@@ -1689,6 +1717,7 @@ def clear_bookings(event_id):
             attendee_email=to_email, attendee_name=to_name, location=location,
             description="Test invite from AJ Bookings — safe to accept or decline. "
                         "Trigger a test cancel from the same admin panel afterward to confirm that path too.",
+            timezone=event['timezone'],
         )
         subject = f"[TEST] Calendar invite — {event['name']}"
         html_body = (
@@ -1872,6 +1901,7 @@ def public_get_event(slug):
             'brand_color': event['brand_color'] or '#1a1a1a',
             'allow_waitlist': bool(event['allow_waitlist']),
             'allow_reschedule': bool(event['allow_reschedule']),
+            'timezone': event['timezone'],
         },
         'slots': slot_list,
         'form_fields': field_list,
@@ -1961,7 +1991,6 @@ def public_create_booking(slug):
             'status': status,
             'cancel_url': cancel_url,
             'reschedule_url': reschedule_url,
-            'message': _custom_message(event, 'waitlist' if status == 'waitlisted' else 'confirmation'),
         }
     }), 201
 

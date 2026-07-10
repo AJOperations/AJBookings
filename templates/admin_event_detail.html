@@ -76,6 +76,18 @@
                     <label for="ev-max-bookings">Max Bookings / Email</label>
                     <input type="number" id="ev-max-bookings" min="1">
                 </div>
+                <div class="bk-form-row">
+                    <label for="ev-timezone">Time Zone</label>
+                    <select id="ev-timezone">
+                        <option value="America/New_York">Eastern (ET)</option>
+                        <option value="America/Chicago">Central (CT)</option>
+                        <option value="America/Denver">Mountain (MT)</option>
+                        <option value="America/Phoenix">Arizona — no DST (MST)</option>
+                        <option value="America/Los_Angeles">Pacific (PT)</option>
+                        <option value="America/Anchorage">Alaska (AKT)</option>
+                        <option value="Pacific/Honolulu">Hawaii — no DST (HST)</option>
+                    </select>
+                </div>
             </div>
             <div class="bk-form-row">
                 <label for="ev-notes">Notes</label>
@@ -589,6 +601,7 @@
             document.getElementById('ev-notes').value = ev.notes || '';
             document.getElementById('ev-status').value = ev.status;
             document.getElementById('ev-max-bookings').value = ev.max_bookings_per_email || '';
+            document.getElementById('ev-timezone').value = ev.timezone || 'America/Chicago';
             document.getElementById('ev-waitlist').checked = !!ev.allow_waitlist;
             document.getElementById('ev-reschedule').checked = !!ev.allow_reschedule;
             document.getElementById('ev-image').value = ev.cover_image_url || '';
@@ -614,6 +627,7 @@
                 notes: document.getElementById('ev-notes').value.trim(),
                 status: document.getElementById('ev-status').value,
                 max_bookings_per_email: document.getElementById('ev-max-bookings').value || null,
+                timezone: document.getElementById('ev-timezone').value,
                 allow_waitlist: document.getElementById('ev-waitlist').checked,
                 allow_reschedule: document.getElementById('ev-reschedule').checked,
                 cover_image_url: document.getElementById('ev-image').value.trim(),

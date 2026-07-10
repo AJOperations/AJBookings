@@ -58,6 +58,18 @@
                     <label for="f-max-bookings">Max Bookings / Email</label>
                     <input type="number" id="f-max-bookings" min="1" placeholder="optional">
                 </div>
+                <div class="bk-form-row">
+                    <label for="f-timezone">Time Zone</label>
+                    <select id="f-timezone">
+                        <option value="America/New_York">Eastern (ET)</option>
+                        <option value="America/Chicago" selected>Central (CT)</option>
+                        <option value="America/Denver">Mountain (MT)</option>
+                        <option value="America/Phoenix">Arizona — no DST (MST)</option>
+                        <option value="America/Los_Angeles">Pacific (PT)</option>
+                        <option value="America/Anchorage">Alaska (AKT)</option>
+                        <option value="Pacific/Honolulu">Hawaii — no DST (HST)</option>
+                    </select>
+                </div>
             </div>
             <div class="bk-form-row">
                 <label for="f-notes">Notes</label>
@@ -229,6 +241,7 @@
             const allow_waitlist = document.getElementById('f-waitlist').checked;
             const allow_reschedule = document.getElementById('f-reschedule').checked;
             const max_bookings_per_email = document.getElementById('f-max-bookings').value || null;
+            const timezone = document.getElementById('f-timezone').value;
 
             if (!name) { showToast('Name is required', 'error'); return; }
             if (!isValidJobNumber(job_number)) { showToast('Job number must be exactly 7 digits', 'error'); return; }
@@ -236,7 +249,7 @@
             const res = await fetch('/api/events', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, job_number, location, notes, allow_waitlist, allow_reschedule, max_bookings_per_email })
+                body: JSON.stringify({ name, job_number, location, notes, allow_waitlist, allow_reschedule, max_bookings_per_email, timezone })
             });
             const data = await res.json();
 
