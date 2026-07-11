@@ -4,41 +4,72 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bookings</title>
-    <link rel="icon" type="image/png" href="https://aj-hq.up.railway.app/static/AJ_FavIcon.png">
-    <link rel="stylesheet" href="https://aj-hq.up.railway.app/static/aj-theme.css?v=1">
+    <link rel="icon" type="image/png" href="/static/aj/favicon.png">
+    <link rel="stylesheet" href="https://aj-hq.up.railway.app/static/aj-theme.css?v=3">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
-    <link rel="stylesheet" href="/static/main.css?v=2">
-    <script src="https://aj-hq.up.railway.app/static/aj-utils.js"></script>
+    <link rel="stylesheet" href="/static/main.css?v=3">
+    <script src="https://aj-hq.up.railway.app/static/aj-utils.js?v=2"></script>
 </head>
 <body>
-    <header class="aj-header" id="aj-header">
-        <div class="aj-header-left">
-            <div class="aj-hq-trigger" onclick="ajToggleAppMenu()" aria-label="Open app menu">
-                <img class="aj-bug" src="" alt="August Jackson">
-                <span class="aj-hq-label">HQ</span>
-                <i class="ti ti-chevron-down aj-hq-chevron" aria-hidden="true"></i>
-            </div>
-            <span class="aj-tool-name">Bookings</span>
-        </div>
-        <div class="aj-header-right">
-            <div id="aj-user-zone"></div>
-            <div class="aj-header-divider"></div>
-            <button class="aj-theme-toggle" aria-label="Toggle theme">
-                <i class="ti ti-moon aj-icon-moon" aria-hidden="true"></i>
-                <i class="ti ti-sun aj-icon-sun" aria-hidden="true"></i>
-            </button>
-        </div>
-    </header>
-    <div class="aj-app-menu" id="aj-app-menu" hidden></div>
-    <div id="toast-container"></div>
 
-    <main class="container bk-page">
+<!-- ════════════════════════════════════════════════════════════════════════
+     SHELL SCAFFOLD — copy verbatim from design_handoff_app_shell/shell-starter.html.
+     ajInitShell() fills the marked hooks. Only .aj-content is this app's own.
+     (Shell migration, 2026-07-11 — replaces the old ajInitHeader top bar.)
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="aj-shell">
+
+  <!-- Icon rail: mark + dynamic app list + user avatar -->
+  <aside class="aj-rail" aria-label="Apps">
+    <a class="aj-rail-mark" href="https://aj-hq.up.railway.app/" title="HQ">
+      <img src="/static/aj/aj-bug-reverse.png" alt="August Jackson HQ">
+    </a>
+    <nav id="aj-rail-apps" style="display:flex;flex-direction:column;align-items:center;gap:5px"><!-- ajInitShell --></nav>
+    <div class="aj-rail-user" id="aj-user-zone"><!-- ajInitShell (reuses header user menu) --></div>
+  </aside>
+
+  <!-- Context panel: this app's own nav + pinned -->
+  <nav class="aj-panel" aria-label="Bookings navigation">
+    <div class="aj-panel-head">
+      <div class="aj-panel-title" id="aj-panel-title"></div>
+      <div class="aj-panel-sub" id="aj-panel-sub"></div>
+    </div>
+    <div class="aj-jump" data-aj-cmdk-open role="button" tabindex="0" aria-label="Open command palette">
+      <i class="ti ti-search"></i>
+      <span class="aj-jump-label">Jump to…</span>
+      <span class="aj-kbd">⌘K</span>
+    </div>
+    <div class="aj-panel-body">
+      <div class="aj-nav-label">Pinned</div>
+      <div id="aj-pin-list"><!-- ajInitShell --></div>
+      <div id="aj-panel-nav"><!-- ajInitShell renders sections --></div>
+    </div>
+  </nav>
+
+  <!-- Main column -->
+  <div class="aj-main">
+    <header class="aj-topbar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="aj-theme-toggle" id="aj-nav-toggle" aria-label="Toggle navigation"><i class="ti ti-layout-sidebar-left-collapse"></i></button>
+        <div class="aj-topbar-title" id="aj-topbar-title"></div>
+      </div>
+      <div class="aj-topbar-right">
+        <button class="aj-settings" id="aj-settings" hidden aria-label="Settings"><i class="ti ti-settings"></i></button>
+        <button class="aj-theme-toggle" aria-label="Toggle theme">
+          <i class="ti ti-moon aj-icon-moon"></i>
+          <i class="ti ti-sun aj-icon-sun"></i>
+        </button>
+      </div>
+    </header>
+
+<main class="aj-content">
+    <div class="bk-page">
         <div class="bk-page-header">
             <h1>Events</h1>
             <button class="aj-btn aj-btn-primary" id="new-event-btn"><i class="ti ti-plus"></i> New Event</button>
         </div>
 
-        <div class="aj-card bk-card bk-hidden" id="new-event-card">
+        <div class="aj-card bk-card hidden" id="new-event-card">
             <h2>New Event</h2>
             <div class="bk-form-grid">
                 <div class="bk-form-row">
@@ -48,7 +79,7 @@
                 <div class="bk-form-row" style="position:relative;">
                     <label for="f-job">Job Number</label>
                     <input type="text" id="f-job" placeholder="Search by job number, client, or job name" autocomplete="off">
-                    <div id="f-job-suggestions" class="bk-suggestions bk-hidden"></div>
+                    <div id="f-job-suggestions" class="bk-suggestions hidden"></div>
                 </div>
                 <div class="bk-form-row">
                     <label for="f-location">Location</label>
@@ -103,11 +134,30 @@
                     <tbody id="events-tbody"></tbody>
                 </table>
             </div>
-            <div class="bk-empty-state bk-hidden" id="events-empty">No events yet — create your first one above.</div>
+            <div class="bk-empty-state hidden" id="events-empty">No events yet — create your first one above.</div>
         </div>
-    </main>
+    </div>
+</main>
+    <!-- ▲▲▲ END .aj-content ▲▲▲ -->
+  </div>
+</div>
+<!-- ▲▲▲ END .aj-shell ▲▲▲ -->
 
-    <script>
+<!-- Command palette (⌘K) — copy verbatim -->
+<div class="aj-cmdk-overlay" id="aj-cmdk-overlay" role="dialog" aria-modal="true" aria-label="Command palette">
+  <div class="aj-cmdk">
+    <div class="aj-cmdk-input-row">
+      <i class="ti ti-search"></i>
+      <input class="aj-cmdk-input" id="aj-cmdk-input" placeholder="Search apps & projects…" autocomplete="off">
+      <span class="aj-kbd">ESC</span>
+    </div>
+    <div class="aj-cmdk-list" id="aj-cmdk-list"></div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
         // ── Tap-twice inline confirm ────────────────────────────────────────
         // window.confirm() is banned per standards (bad on mobile, blocked in
         // some HTTPS contexts). First click arms the button and shows a
@@ -131,15 +181,25 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            ajInitHeader({ toolName: 'Bookings' });
+            ajInitShell({
+                app: 'bookings',
+                toolName: 'Bookings',
+                subtitle: 'Events',
+                settingsUrl: '/admin',
+                sections: [
+                    { label: 'Bookings', items: [
+                        { name: 'Events', icon: 'ti-calendar-event', href: '/', active: true },
+                    ]},
+                ],
+            });
             loadEvents();
             wireJobAutocomplete('f-job', 'f-job-suggestions');
 
             document.getElementById('new-event-btn').addEventListener('click', () => {
-                document.getElementById('new-event-card').classList.remove('bk-hidden');
+                document.getElementById('new-event-card').classList.remove('hidden');
             });
             document.getElementById('cancel-new-event-btn').addEventListener('click', () => {
-                document.getElementById('new-event-card').classList.add('bk-hidden');
+                document.getElementById('new-event-card').classList.add('hidden');
             });
             document.getElementById('create-event-btn').addEventListener('click', createEvent);
         });
@@ -157,7 +217,7 @@
 
             input.addEventListener('input', async () => {
                 const q = input.value.trim().toLowerCase();
-                if (!q) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
+                if (!q) { dropdown.classList.add('hidden'); dropdown.innerHTML = ''; return; }
 
                 const jobs = await ensureJobsLoaded();
                 const currentYear = new Date().getFullYear();
@@ -172,7 +232,7 @@
                         (j.job_name || '').toLowerCase().includes(q);
                 }).slice(0, 8);
 
-                if (matches.length === 0) { dropdown.classList.add('bk-hidden'); dropdown.innerHTML = ''; return; }
+                if (matches.length === 0) { dropdown.classList.add('hidden'); dropdown.innerHTML = ''; return; }
 
                 dropdown.innerHTML = matches.map(j => `
                     <div class="bk-suggestion-item" data-job="${j.job_number}">
@@ -180,12 +240,12 @@
                         <div class="bk-suggestion-meta">${esc(j.job_name || '')}</div>
                     </div>
                 `).join('');
-                dropdown.classList.remove('bk-hidden');
+                dropdown.classList.remove('hidden');
 
                 dropdown.querySelectorAll('.bk-suggestion-item').forEach(item => {
                     item.addEventListener('click', () => {
                         input.value = item.dataset.job;
-                        dropdown.classList.add('bk-hidden');
+                        dropdown.classList.add('hidden');
                         dropdown.innerHTML = '';
                     });
                 });
@@ -193,7 +253,7 @@
 
             document.addEventListener('click', (e) => {
                 if (!input.contains(e.target) && !dropdown.contains(e.target)) {
-                    dropdown.classList.add('bk-hidden');
+                    dropdown.classList.add('hidden');
                 }
             });
         }
@@ -211,10 +271,10 @@
             tbody.innerHTML = '';
 
             if (!data.events || data.events.length === 0) {
-                empty.classList.remove('bk-hidden');
+                empty.classList.remove('hidden');
                 return;
             }
-            empty.classList.add('bk-hidden');
+            empty.classList.add('hidden');
 
             data.events.forEach(ev => {
                 const tr = document.createElement('tr');
@@ -258,7 +318,7 @@
                 return;
             }
 
-            document.getElementById('new-event-card').classList.add('bk-hidden');
+            document.getElementById('new-event-card').classList.add('hidden');
             ['f-name','f-job','f-location','f-notes','f-max-bookings'].forEach(id => document.getElementById(id).value = '');
             document.getElementById('f-waitlist').checked = false;
             document.getElementById('f-reschedule').checked = false;
@@ -278,6 +338,6 @@
                 loadEvents();
             });
         }
-    </script>
+</script>
 </body>
 </html>

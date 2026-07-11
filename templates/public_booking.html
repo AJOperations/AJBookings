@@ -104,7 +104,10 @@
         .form-row { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
         .form-row label { font-size: 13px; font-weight: 600; }
         .form-row input[type="text"], .form-row input[type="email"], .form-row select, .form-row textarea {
-            font-size: 14px; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit;
+            /* 16px, not 14px — this is the one public-facing mobile form in
+               the app; below 16px, iOS Safari auto-zooms on focus (retrofit,
+               2026-07-11; reference-app-standards Design Standards). */
+            font-size: 16px; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit;
         }
         .checkbox-row { display: flex; align-items: center; gap: 10px; min-height: 44px; }
         .checkbox-row input[type="checkbox"] { width: 20px; height: 20px; flex-shrink: 0; }
