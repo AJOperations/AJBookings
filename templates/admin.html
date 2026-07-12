@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — Bookings</title>
+  <link rel="icon" type="image/png" href="/static/aj/favicon.png">
+  <link rel="stylesheet" href="https://aj-hq.up.railway.app/static/aj-theme.css?v=3">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/main.css?v=3">
+  <script src="https://aj-hq.up.railway.app/static/aj-utils.js?v=2"></script>
+  <style>
+    input[type=text], input[type=number], input[type=search], input[type=date] { font-size: 16px; }
+
+    .admin-header { margin-bottom: 28px; }
+    .admin-title { font-family: var(--font-display); font-size: 24px; font-weight: 600; }
+    .admin-subtitle { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+    .admin-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .admin-stat-label {
+      font-family: var(--font-display);
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    .admin-stat-value {
+      font-family: var(--font-display);
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--body-text-85);
+    }
+    .admin-stat-value.teal { color: var(--teal); }
+    .admin-stat-value.warn { color: var(--warning); }
+
+    .admin-section { margin-bottom: 24px; }
+    .admin-section-title {
+      font-family: var(--font-display);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: 12px;
+    }
+    .admin-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 0.5px solid var(--border);
+      font-size: 13px;
+    }
+    .admin-row:last-child { border-bottom: none; }
+    .admin-row .k { color: var(--text-muted); }
+    .admin-row .v { color: var(--body-text-85); font-weight: 600; }
+
+    .empty-note { color: var(--text-muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     SHELL SCAFFOLD — copy verbatim from design_handoff_app_shell/shell-starter.html.
+     ajInitShell() fills the marked hooks. Only .aj-content is this app's own.
+     New page, added during the aj-shared retrofit (2026-07-11, Christine's
+     call — audit/DECISIONS.md #5 — resolves the previously-missing
+     settingsUrl: '/admin' target).
+     ════════════════════════════════════════════════════════════════════════ -->
+<div class="aj-shell">
+
+  <!-- Icon rail: mark + dynamic app list + user avatar -->
+  <aside class="aj-rail" aria-label="Apps">
+    <a class="aj-rail-mark" href="https://aj-hq.up.railway.app/" title="HQ">
+      <img src="/static/aj/aj-bug-reverse.png" alt="August Jackson HQ">
+    </a>
+    <nav id="aj-rail-apps" style="display:flex;flex-direction:column;align-items:center;gap:5px"><!-- ajInitShell --></nav>
+    <div class="aj-rail-user" id="aj-user-zone"><!-- ajInitShell (reuses header user menu) --></div>
+  </aside>
+
+  <!-- Context panel: this app's own nav + pinned -->
+  <nav class="aj-panel" aria-label="Bookings navigation">
+    <div class="aj-panel-head">
+      <div class="aj-panel-title" id="aj-panel-title"></div>
+      <div class="aj-panel-sub" id="aj-panel-sub"></div>
+    </div>
+    <div class="aj-jump" data-aj-cmdk-open role="button" tabindex="0" aria-label="Open command palette">
+      <i class="ti ti-search"></i>
+      <span class="aj-jump-label">Jump to…</span>
+      <span class="aj-kbd">⌘K</span>
+    </div>
+    <div class="aj-panel-body">
+      <div class="aj-nav-label">Pinned</div>
+      <div id="aj-pin-list"><!-- ajInitShell --></div>
+      <div id="aj-panel-nav"><!-- ajInitShell renders sections --></div>
+    </div>
+  </nav>
+
+  <!-- Main column -->
+  <div class="aj-main">
+    <header class="aj-topbar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="aj-theme-toggle" id="aj-nav-toggle" aria-label="Toggle navigation"><i class="ti ti-layout-sidebar-left-collapse"></i></button>
+        <div class="aj-topbar-title" id="aj-topbar-title"></div>
+      </div>
+      <div class="aj-topbar-right">
+        <button class="aj-settings" id="aj-settings" hidden aria-label="Settings"><i class="ti ti-settings"></i></button>
+        <button class="aj-theme-toggle" aria-label="Toggle theme">
+          <i class="ti ti-moon aj-icon-moon"></i>
+          <i class="ti ti-sun aj-icon-sun"></i>
+        </button>
+      </div>
+    </header>
+
+<main class="aj-content">
+  <div class="admin-header">
+    <div class="admin-title">Admin</div>
+    <div class="admin-subtitle">Bookings — read-only snapshot. No editable settings yet.</div>
+  </div>
+
+  <div class="admin-grid">
+    <div class="aj-card">
+      <div class="admin-stat-label">Total Events</div>
+      <div class="admin-stat-value teal" id="stat-events">—</div>
+    </div>
+    <div class="aj-card">
+      <div class="admin-stat-label">Active Events</div>
+      <div class="admin-stat-value" id="stat-active-events">—</div>
+    </div>
+    <div class="aj-card">
+      <div class="admin-stat-label">Bookings</div>
+      <div class="admin-stat-value" id="stat-bookings">—</div>
+    </div>
+  </div>
+
+  <div class="admin-section">
+    <div class="admin-section-title">Signed In As</div>
+    <div class="admin-row">
+      <div class="k">Name</div>
+      <div class="v" id="user-name">—</div>
+    </div>
+    <div class="admin-row">
+      <div class="k">Role</div>
+      <div class="v" id="user-role">—</div>
+    </div>
+  </div>
+
+  <div class="admin-section">
+    <div class="admin-section-title">Fleet</div>
+    <p class="empty-note">
+      User management, roles, and tags are administered in
+      <a href="https://aj-hq.up.railway.app/admin" class="aj-text-teal">HQ Admin</a> —
+      not duplicated here.
+    </p>
+  </div>
+</main>
+    <!-- ▲▲▲ END .aj-content ▲▲▲ -->
+  </div>
+</div>
+<!-- ▲▲▲ END .aj-shell ▲▲▲ -->
+
+<!-- Command palette (⌘K) — copy verbatim -->
+<div class="aj-cmdk-overlay" id="aj-cmdk-overlay" role="dialog" aria-modal="true" aria-label="Command palette">
+  <div class="aj-cmdk">
+    <div class="aj-cmdk-input-row">
+      <i class="ti ti-search"></i>
+      <input class="aj-cmdk-input" id="aj-cmdk-input" placeholder="Search apps & projects…" autocomplete="off">
+      <span class="aj-kbd">ESC</span>
+    </div>
+    <div class="aj-cmdk-list" id="aj-cmdk-list"></div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  ajInitShell({
+    app: 'bookings',
+    toolName: 'Bookings',
+    subtitle: 'Admin',
+    settingsUrl: '/admin',
+    sections: [
+      { label: 'Bookings', items: [
+        { name: 'Events', icon: 'ti-calendar-event', href: '/', active: false },
+        { name: 'Admin', icon: 'ti-settings', href: '/admin', active: true },
+      ]},
+    ],
+  });
+  loadSummary();
+  loadUser();
+});
+
+async function loadSummary() {
+  try {
+    const res  = await fetch('/api/summary');
+    const data = await res.json();
+    document.getElementById('stat-events').textContent        = data.counts?.events ?? '—';
+    document.getElementById('stat-active-events').textContent = data.counts?.active_events ?? '—';
+    document.getElementById('stat-bookings').textContent      = data.counts?.bookings ?? '—';
+  } catch (e) {
+    toast('Failed to load summary', 'error');
+  }
+}
+
+async function loadUser() {
+  try {
+    const res  = await fetch('/auth/validate');
+    const data = await res.json();
+    if (data.valid && data.user) {
+      document.getElementById('user-name').textContent = data.user.name || '—';
+      document.getElementById('user-role').textContent = data.user.role || '—';
+    }
+  } catch (e) {
+    // aj-utils.js's own shell init already surfaces auth failures — no
+    // need to duplicate a toast here.
+  }
+}
+</script>
+</body>
+</html>

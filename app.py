@@ -9,8 +9,10 @@ promoted bookings get a real calendar invite (METHOD:REQUEST); cancels
 and reschedule-releases get METHOD:CANCEL for the same UID — see
 ics_builder.py. Email routes through HQ's /api/email/send proxy.
 
-Architecture: same pattern as Invoice Tracker — standalone Railway app,
-aj_auth.py for admin auth, HQ proxy block for shared reference data.
+Architecture: standalone Railway app on the aj-shared package (retrofit,
+2026-07-11) — token-validated admin auth (aj_shared.require_auth) and the
+full HQ data proxy contract (aj_shared.register_proxy) both come from the
+shared package now, not pasted/hand-rolled copies.
 """
 
 import os
@@ -27,14 +29,16 @@ from datetime import datetime, date, timedelta
 
 import requests as req
 from flask import Flask, request, jsonify, g, session, render_template, Response
-from flask_cors import CORS
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
 
-from aj_auth import require_auth, get_current_user
+from aj_shared import (
+    require_auth, get_current_user, register_proxy,
+    require_env_secret, configure_session_security, register_error_handlers,
+)
 import ics_builder
 
 logging.basicConfig(level=logging.INFO)
@@ -42,35 +46,28 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='static', static_url_path='/static', template_folder='templates')
 
-# ── CORS — restrict to known AJ origins ──────────────────────────────────────
-CORS(app, origins=[
-    r"https://.*\.up\.railway\.app",
-    r"https://.*\.netlify\.app",
-    r"http://localhost:.*",
-    r"http://127\.0\.0\.1:.*",
-], supports_credentials=True)
-
-# ── Hard-fail on missing secrets in production ───────────────────────────────
 _FLASK_ENV = os.environ.get('FLASK_ENV', 'production')
 _IS_PROD   = _FLASK_ENV == 'production'
 
-_secret = os.environ.get('FLASK_SECRET_KEY')
-if not _secret:
-    if _IS_PROD:
-        raise RuntimeError(
-            "FLASK_SECRET_KEY is not set — refusing to start in production. "
-            "Generate one (openssl rand -hex 32) and set it in Railway env vars."
-        )
-    _secret = 'dev-secret-change-in-prod'
-    logger.warning("FLASK_SECRET_KEY not set — using insecure dev key (FLASK_ENV != production)")
-app.secret_key = _secret
+# Fail-loud secret loading (OWASP A04/A07:2025) — refuses to start in
+# production if either is unset, instead of silently falling back to a known
+# string. Same value as HQ and every other AJ app. Retrofit (2026-07-11):
+# replaces this app's own hand-rolled copy of the identical pattern with the
+# shared one in aj-shared, now that it exists.
+app.secret_key = require_env_secret('FLASK_SECRET_KEY')
+PLATFORM_SECRET = require_env_secret('PLATFORM_SECRET')
 
-PLATFORM_SECRET = os.environ.get('PLATFORM_SECRET', '')
-if not PLATFORM_SECRET and _IS_PROD:
-    raise RuntimeError(
-        "PLATFORM_SECRET is not set — refusing to start in production. "
-        "Same value as HQ and every other AJ app."
-    )
+# Explicit session cookie flags + ProxyFix (Railway terminates TLS at its own
+# edge — without this, the `next=` redirect URL aj_shared's require_auth()
+# builds can end up with the wrong scheme) + generic error responses (no
+# stack traces to the client) — see aj_shared's Security Standards section.
+# CORS is now configured by register_proxy() below (fixed AJ-hostname
+# allowlist), replacing this app's former CORS(app, origins=[...]) call,
+# which used broad regexes matching any *.up.railway.app / *.netlify.app
+# project — not just AJ's own, an OWASP CORS misconfiguration this retrofit
+# closes.
+configure_session_security(app)
+register_error_handlers(app)
 
 DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 
@@ -79,8 +76,7 @@ DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 SCHEMA_VERSION = 6
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
-_HQ_TIMEOUT = 5
-_HQ_UPLOAD_TIMEOUT = 15  # multipart forwarding (feedback screenshots, email attachments) needs more headroom
+_HQ_UPLOAD_TIMEOUT = 15  # multipart forwarding (email attachments) needs more headroom than a plain reference-data GET
 
 # When set, every outbound email's recipients are redirected here instead of
 # the real address — applied in send_email() before calling HQ, per the
@@ -330,150 +326,24 @@ def _normalize_dropbox_url(url):
     return f'{url}{sep}raw=1'
 
 
-def _hq_get(path):
-    try:
-        r = req.get(
-            f'{_HQ_BASE}{path}',
-            headers={'X-AJ-Key': PLATFORM_SECRET},
-            timeout=_HQ_TIMEOUT
-        )
-        return r.json(), r.status_code
-    except Exception as e:
-        return {'error': str(e)}, 502
-
-
 def _gen_token():
     return secrets.token_urlsafe(24)
 
 
-# ── HQ Proxy Block (verbatim per reference-app-standards) ────────────────────
-
-@app.route('/api/apps')
-def proxy_apps():
-    data, status = _hq_get('/api/apps')
-    return jsonify(data), status
-
-
-@app.route('/auth/validate')
-def proxy_auth_validate():
-    cached = session.get('_aj_user')
-    if cached:
-        return jsonify({'valid': True, 'user': cached}), 200
-    token = request.args.get('token', '')
-    try:
-        r = req.get(
-            f'{_HQ_BASE}/auth/validate',
-            headers={'X-AJ-Key': PLATFORM_SECRET},
-            params={'token': token} if token else {},
-            timeout=_HQ_TIMEOUT
-        )
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({'valid': False, 'error': str(e)}), 502
-
-
-@app.route('/api/users')
-def proxy_users():
-    data, status = _hq_get('/api/users')
-    return jsonify(data), status
-
-
-@app.route('/api/rates')
-def proxy_rates():
-    client = request.args.get('client', '')
-    path = f'/api/rates?client={client}' if client else '/api/rates'
-    data, status = _hq_get(path)
-    return jsonify(data), status
-
-
-@app.route('/api/rates/lookup')
-def proxy_rates_lookup():
-    qs = request.query_string.decode()
-    data, status = _hq_get(f'/api/rates/lookup?{qs}')
-    return jsonify(data), status
-
-
-@app.route('/api/people')
-def proxy_people():
-    item_type = request.args.get('item_type', '')
-    path = f'/api/people?item_type={item_type}' if item_type else '/api/people'
-    data, status = _hq_get(path)
-    return jsonify(data), status
-
-
-@app.route('/api/codes')
-def proxy_codes():
-    data, status = _hq_get('/api/codes')
-    return jsonify(data), status
-
-
-@app.route('/api/codes/fees')
-def proxy_codes_fees():
-    data, status = _hq_get('/api/codes/fees')
-    return jsonify(data), status
-
-
-@app.route('/api/codes/expenses')
-def proxy_codes_expenses():
-    data, status = _hq_get('/api/codes/expenses')
-    return jsonify(data), status
-
-
-@app.route('/api/jobs')
-def proxy_jobs():
-    qs = request.query_string.decode()
-    path = f'/api/jobs?{qs}' if qs else '/api/jobs'
-    data, status = _hq_get(path)
-    return jsonify(data), status
-
-
-@app.route('/api/jobs/<job_number>')
-def proxy_jobs_single(job_number):
-    data, status = _hq_get(f'/api/jobs/{job_number}')
-    return jsonify(data), status
-
-
-@app.route('/api/users/me/password', methods=['POST'])
-def proxy_user_change_password():
-    try:
-        r = req.post(
-            f'{_HQ_BASE}/api/users/me/password',
-            headers={
-                'X-AJ-Key': PLATFORM_SECRET,
-                'Content-Type': 'application/json',
-                'Cookie': f'aj_session={request.cookies.get("aj_session", "")}',
-            },
-            json=request.get_json(force=True, silent=True) or {},
-            timeout=_HQ_TIMEOUT
-        )
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({'error': str(e)}), 502
-
-
-@app.route('/api/feedback', methods=['POST'])
-def proxy_feedback():
-    """Forwards a feedback widget submission (multipart, optional screenshot)
-    to HQ. No local session check here — submitter name/email travel as
-    form fields the widget already pulled from /auth/validate client-side;
-    this route's only job is adding the platform secret and relaying bytes.
-    Uses _HQ_UPLOAD_TIMEOUT, not _HQ_TIMEOUT — screenshot uploads need more
-    headroom than a plain reference-data GET."""
-    files = None
-    if 'screenshot' in request.files and request.files['screenshot'].filename:
-        f = request.files['screenshot']
-        files = {'screenshot': (f.filename, f.stream, f.mimetype)}
-    try:
-        r = req.post(
-            f'{_HQ_BASE}/api/feedback',
-            headers={'X-AJ-Key': PLATFORM_SECRET},
-            data=request.form.to_dict(),
-            files=files,
-            timeout=_HQ_UPLOAD_TIMEOUT
-        )
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({'error': str(e)}), 502
+# ── HQ Data Proxy — registers the full standard contract (/api/apps,
+# /auth/validate, /auth/logout, /api/users, /api/rates, /api/rates/lookup,
+# /api/people, /api/codes(+fees/expenses), /api/jobs(+/<job_number>),
+# /api/clients, /api/contracts, /api/users/me/password, /api/feedback,
+# /api/dropbox/list, /api/dropbox/upload, /api/email/send) plus
+# /api/contract, and configures the fixed-origin CORS allowlist — replacing
+# the ~14-route hand-pasted proxy block this app carried before the
+# aj-shared retrofit (2026-07-11). Every route above is registered
+# `@require_auth(json=True)` by the package itself, closing a real gap the
+# old pasted block had: none of those routes checked for a local session at
+# all, so an unauthenticated visitor could hit e.g. this app's own
+# /api/jobs and get real HQ data back (server-to-server auth via
+# PLATFORM_SECRET happened, but nothing ever verified *who* was asking).
+register_proxy(app, app_name='Bookings')
 
 
 # ── Email — wired to HQ's Mailgun proxy ────────────────────────────────────────
@@ -526,7 +396,7 @@ def send_email(to, subject, html_body, attachments=None):
 # old-slot). Keeping the ICS-building + email copy in one place so the three
 # sites can't quietly drift from each other.
 
-BOOKINGS_BASE_URL = 'https://ajbookings.up.railway.app'
+BOOKINGS_BASE_URL = os.environ.get('BOOKINGS_BASE_URL', 'https://ajbookings.up.railway.app')
 
 
 def _slot_location(event, slot):
@@ -678,24 +548,38 @@ def admin_event_detail_page(event_id):
                             current_user_email=(user.get('email') if user else ''))
 
 
+@app.route('/admin')
+@require_auth(role='admin')
+def admin_page():
+    """Settings/fleet page reached via the shell's gear icon
+    (settingsUrl: '/admin') — added during the aj-shared retrofit
+    (2026-07-11, Christine's call, audit/DECISIONS.md #5). Read-only; user
+    management/roles/tags stay in HQ Admin, not duplicated here."""
+    return render_template('admin.html')
+
+
 # ── /api/summary (required by convention) ────────────────────────────────────
 
 @app.route('/api/summary')
+@require_auth(json=True)
 def api_summary():
     db = get_db()
     total = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     active = db.execute("SELECT COUNT(*) FROM events WHERE status = 'active'").fetchone()[0]
+    bookings_total = db.execute(
+        "SELECT COUNT(*) FROM bookings WHERE status != 'cancelled'"
+    ).fetchone()[0]
     return jsonify({
         'app': 'Bookings',
         'status': 'ok',
-        'counts': {'events': total, 'active_events': active}
+        'counts': {'events': total, 'active_events': active, 'bookings': bookings_total}
     })
 
 
 # ── Events CRUD ───────────────────────────────────────────────────────────────
 
 @app.route('/api/events', methods=['GET'])
-@require_auth
+@require_auth(json=True)
 def list_events():
     db = get_db()
     rows = db.execute("""
@@ -711,7 +595,7 @@ def list_events():
 
 
 @app.route('/api/events', methods=['POST'])
-@require_auth
+@require_auth(json=True)
 def create_event():
     body = request.get_json(force=True, silent=True) or {}
     name = (body.get('name') or '').strip()
@@ -752,7 +636,7 @@ def create_event():
 
 
 @app.route('/api/events/<int:event_id>', methods=['GET'])
-@require_auth
+@require_auth(json=True)
 def get_event(event_id):
     db = get_db()
     event = _row_to_dict(db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone())
@@ -766,7 +650,7 @@ def get_event(event_id):
 
 
 @app.route('/api/events/<int:event_id>', methods=['PATCH'])
-@require_auth
+@require_auth(json=True)
 def update_event(event_id):
     db = get_db()
     existing = db.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
@@ -871,7 +755,7 @@ def update_event(event_id):
 
 
 @app.route('/api/events/<int:event_id>', methods=['DELETE'])
-@require_auth
+@require_auth(json=True)
 def delete_event(event_id):
     db = get_db()
     existing = db.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
@@ -1187,7 +1071,7 @@ def delete_slot(slot_id):
 # ── Form Fields ───────────────────────────────────────────────────────────────
 
 @app.route('/api/events/<int:event_id>/form-fields', methods=['GET'])
-@require_auth
+@require_auth(json=True)
 def list_form_fields(event_id):
     db = get_db()
     rows = db.execute(
@@ -1202,7 +1086,7 @@ def list_form_fields(event_id):
 
 
 @app.route('/api/events/<int:event_id>/form-fields', methods=['POST'])
-@require_auth
+@require_auth(json=True)
 def create_form_field(event_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM events WHERE id = ?", (event_id,)).fetchone():
@@ -1240,7 +1124,7 @@ def create_form_field(event_id):
 
 
 @app.route('/api/form-fields/<int:field_id>', methods=['PATCH'])
-@require_auth
+@require_auth(json=True)
 def update_form_field(field_id):
     db = get_db()
     existing = db.execute("SELECT * FROM form_fields WHERE id = ?", (field_id,)).fetchone()
@@ -1282,7 +1166,7 @@ def update_form_field(field_id):
 
 
 @app.route('/api/form-fields/<int:field_id>', methods=['DELETE'])
-@require_auth
+@require_auth(json=True)
 def delete_form_field(field_id):
     db = get_db()
     if not db.execute("SELECT 1 FROM form_fields WHERE id = ?", (field_id,)).fetchone():
@@ -1295,7 +1179,7 @@ def delete_form_field(field_id):
 # ── Bookings — admin read + manual waitlist promotion ────────────────────────
 
 @app.route('/api/events/<int:event_id>/bookings', methods=['GET'])
-@require_auth
+@require_auth(json=True)
 def list_bookings(event_id):
     db = get_db()
     rows = db.execute("""
@@ -1579,7 +1463,7 @@ def export_bookings_pdf(event_id):
 
 
 @app.route('/api/bookings/<int:booking_id>/promote', methods=['POST'])
-@require_auth
+@require_auth(json=True)
 def promote_booking(booking_id):
     """
     Manual waitlist promotion only — no auto-promotion when a slot opens
@@ -1620,7 +1504,7 @@ def promote_booking(booking_id):
 
 
 @app.route('/api/bookings/<int:booking_id>', methods=['DELETE'])
-@require_auth
+@require_auth(json=True)
 def delete_booking(booking_id):
     """Hard delete — no cancellation email, no ICS CANCEL sent. This is
     distinct from the public cancel flow (which soft-cancels and notifies
@@ -1638,7 +1522,7 @@ def delete_booking(booking_id):
 
 
 @app.route('/api/events/<int:event_id>/bookings', methods=['DELETE'])
-@require_auth
+@require_auth(json=True)
 def clear_bookings(event_id):
     """Hard delete every booking for this event — no cancellation emails
     sent for any of them. Same silent-cleanup rationale as delete_booking()
@@ -1657,7 +1541,7 @@ def clear_bookings(event_id):
 
 
 @app.route('/api/admin/test-invite', methods=['POST'])
-@require_auth
+@require_auth(json=True)
 def send_test_invite():
     """
     Sends a real invite or cancel through the exact same send_email() /

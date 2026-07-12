@@ -2,10 +2,18 @@
    all come from aj-theme.css (.aj-card, .aj-btn, .aj-pill-*, global input
    styles) — this file adds structure/spacing on top, never color. */
 
+/* aj-theme.css's global input rule is 13px — override to the 16px iOS
+   Safari auto-zoom floor for every input type this app actually uses
+   (retrofit, 2026-07-11; reference-app-standards Design Standards). */
+input, select, textarea { font-size: 16px; }
+
+/* Shell retrofit (2026-07-11): .aj-content (aj-theme.css) now owns the
+   outer page padding — .bk-page only constrains reading width, no longer
+   duplicates it (was max-width + its own 32px/24px/64px padding, stacked
+   on top of .aj-content's 26px/30px). */
 .bk-page {
     max-width: 1100px;
     margin: 0 auto;
-    padding: 32px 24px 64px;
 }
 
 .bk-page-header {
@@ -69,7 +77,7 @@
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--text-dim);
+    color: var(--text-muted); /* was --text-dim (~2.1-2.3:1, fails WCAG AA) — real column-header content, not decorative */
     border-bottom: 0.5px solid var(--border2);
 }
 
@@ -120,25 +128,29 @@
 
 .bk-day-chip.selected {
     background: var(--teal);
+    /* Retrofit audit flagged this hardcoded #000 as design drift — checked
+       aj-theme.css directly (2026-07-11): no --text-on-teal (or equivalent)
+       token exists. aj-theme.css's own .aj-btn-primary uses this identical
+       literal `color: #000` for black-on-teal text, so this matches the
+       canonical shared pattern rather than violating it. Left as-is per
+       the checklist's own instruction not to invent a token that isn't there. */
     color: #000;
     border-color: var(--teal);
 }
 
 .bk-empty-state {
-    color: var(--text-dim);
+    color: var(--text-muted); /* was --text-dim — real body copy, not decorative */
     font-size: 14px;
     padding: 24px 0;
     text-align: center;
 }
-
-.bk-hidden { display: none; }
 
 .bk-source-tag {
     font-size: 11px;
     padding: 2px 8px;
     border-radius: var(--radius-pill);
     background: var(--surface2);
-    color: var(--text-dim);
+    color: var(--text-muted); /* was --text-dim — real label content ("manual"/"generated") */
     border: 0.5px solid var(--border);
 }
 
@@ -154,6 +166,9 @@
     overflow-y: auto;
     z-index: 20;
     margin-top: 4px;
+    /* No shared shadow token exists in aj-theme.css (checked 2026-07-11) —
+       left as a documented exception per the standard's own framing
+       (shadows are lower-priority than text/fill colors). */
     box-shadow: 0 4px 16px rgba(0,0,0,0.15);
 }
 
@@ -168,7 +183,7 @@
 }
 
 .bk-suggestion-meta {
-    color: var(--text-dim);
+    color: var(--text-muted); /* was --text-dim — real content (job name subtitle) */
     font-size: 12px;
 }
 
@@ -203,7 +218,7 @@
 
 .bk-image-editor-hint {
     font-size: 12px;
-    color: var(--text-dim);
+    color: var(--text-muted); /* was --text-dim — real hint copy, not decorative */
     margin-top: 6px;
     display: flex;
     align-items: center;
