@@ -158,6 +158,10 @@
                 <label for="ev-directions">Directions</label>
                 <textarea id="ev-directions" rows="2" placeholder="Parking, building entrance, floor — anything a client needs to actually find you"></textarea>
             </div>
+            <div class="bk-form-row">
+                <label for="ev-directions-heading">Directions heading</label>
+                <input type="text" id="ev-directions-heading" placeholder="Getting there">
+            </div>
 
             <button class="aj-btn aj-btn-primary" id="save-event-btn" style="margin-top:8px;">Save Changes</button>
         </div>
@@ -669,6 +673,8 @@
             imgPosY = ev.cover_image_position_y ?? 50;
             updateImagePreview();
             document.getElementById('ev-directions').value = ev.directions || '';
+            const labels = ev.custom_labels || {};
+            document.getElementById('ev-directions-heading').value = labels.directions_heading || '';
             const color = ev.brand_color || '#1a1a1a';
             document.getElementById('ev-color').value = color;
             document.getElementById('ev-color-hex').value = color;
@@ -695,6 +701,9 @@
                 cover_image_position_y: imgPosY,
                 directions: document.getElementById('ev-directions').value.trim(),
                 brand_color: document.getElementById('ev-color-hex').value.trim(),
+                custom_labels: {
+                    directions_heading: document.getElementById('ev-directions-heading').value.trim(),
+                },
             };
             const res = await fetch(`/api/events/${EVENT_ID}`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
