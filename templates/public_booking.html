@@ -241,7 +241,7 @@
             if (EVENT.location) html += `<div class="meta">${esc(EVENT.location)}</div>`;
             if (EVENT.notes) html += `<div class="notes">${esc(EVENT.notes)}</div>`;
             if (EVENT.directions) {
-                html += `<div class="directions"><strong>Getting there</strong>${esc(EVENT.directions)}</div>`;
+                html += `<div class="directions"><strong>${esc(EVENT.directions_heading)}</strong>${esc(EVENT.directions)}</div>`;
             }
             const existing = document.getElementById('header-block');
             if (existing) existing.remove();

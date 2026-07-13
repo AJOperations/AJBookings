@@ -73,7 +73,7 @@ DB_PATH = os.environ.get('DATABASE_PATH', '/app/data/bookings.db')
 
 # Current schema version — MUST equal the highest `if current < N` migration
 # block below.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _HQ_BASE    = 'https://aj-hq.up.railway.app'
 _HQ_UPLOAD_TIMEOUT = 15  # multipart forwarding (email attachments) needs more headroom than a plain reference-data GET
@@ -89,6 +89,12 @@ TEST_EMAIL_OVERRIDE = os.environ.get('TEST_EMAIL_OVERRIDE', '').strip()
 VALID_FIELD_TYPES = ('text', 'select', 'checkbox')
 VALID_EVENT_STATUSES = ('draft', 'active', 'closed')
 VALID_MESSAGE_TYPES = ('confirmation', 'waitlist', 'cancellation')
+
+# Overridable public-page copy — keyed the same way as VALID_MESSAGE_TYPES,
+# but these REPLACE the default string rather than prepending to it. Add new
+# keys here (and a default) as more labels need per-event customization.
+DEFAULT_LABELS = {'directions_heading': 'Getting there'}
+VALID_LABEL_KEYS = tuple(DEFAULT_LABELS)
 
 # Cap how much a single cadence rule can generate in one call — guards
 # against a typo'd date range (e.g. wrong century) silently trying to
@@ -259,6 +265,18 @@ def init_db():
             )
         current = 6
 
+    if current < 7:
+        cols = get_cols(db, 'events')
+        if 'custom_labels' not in cols:
+            # JSON object, keyed by label name (see VALID_LABEL_KEYS). Unlike
+            # custom_messages, these REPLACE a system default string rather
+            # than prepending to it — e.g. 'directions_heading' overrides the
+            # "Getting there" heading shown above an event's directions on
+            # the public booking page. Missing/blank keys mean "use the
+            # default," not an error.
+            db.execute("ALTER TABLE events ADD COLUMN custom_labels TEXT DEFAULT '{}'")
+        current = 7
+
     db.execute(
         "INSERT INTO schema_meta (id, version) VALUES (1, ?) "
         "ON CONFLICT(id) DO UPDATE SET version = ?",
@@ -412,6 +430,17 @@ def _custom_message(event, message_type):
     except (ValueError, TypeError):
         return ''
     return (msgs.get(message_type) or '').strip()
+
+
+def _custom_label(event, label_key):
+    """Resolves a per-event label override, falling back to the system
+    default. Never raises on malformed JSON — degrades to the default
+    rather than breaking the page."""
+    try:
+        labels = json.loads(event['custom_labels'] or '{}')
+    except (ValueError, TypeError):
+        labels = {}
+    return (labels.get(label_key) or '').strip() or DEFAULT_LABELS[label_key]
 
 
 def _manage_links_text(event, cancel_url, reschedule_url=None):
@@ -741,6 +770,23 @@ def update_event(event_id):
             if v:
                 cleaned[k] = v
         fields['custom_messages'] = json.dumps(cleaned)
+
+    if 'custom_labels' in body:
+        labels = body['custom_labels']
+        if not isinstance(labels, dict):
+            return jsonify({'error': 'custom_labels must be an object'}), 400
+        cleaned = {}
+        for k, v in labels.items():
+            if k not in VALID_LABEL_KEYS:
+                return jsonify({'error': f'custom_labels keys must be one of {VALID_LABEL_KEYS}'}), 400
+            if v is None:
+                continue
+            if not isinstance(v, str):
+                return jsonify({'error': f'custom_labels.{k} must be a string'}), 400
+            v = v.strip()
+            if v:
+                cleaned[k] = v
+        fields['custom_labels'] = json.dumps(cleaned)
 
     if not fields:
         return jsonify({'error': 'no valid fields to update'}), 400
@@ -1779,6 +1825,7 @@ def public_get_event(slug):
             'location': event['location'],
             'notes': event['notes'],
             'directions': event['directions'],
+            'directions_heading': _custom_label(event, 'directions_heading'),
             'cover_image_url': event['cover_image_url'],
             'cover_image_position': event['cover_image_position'] if event['cover_image_position'] is not None else 50,
             'cover_image_position_y': event['cover_image_position_y'] if event['cover_image_position_y'] is not None else 50,
